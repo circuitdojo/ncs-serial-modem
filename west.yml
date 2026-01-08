@@ -8,6 +8,8 @@ manifest:
   remotes:
     - name: ncs
       url-base: https://github.com/nrfconnect
+    - name: nfed
+      url-base:  https://github.com/circuitdojo
 
   projects:
     - name: nrf
@@ -32,3 +34,7 @@ manifest:
           - zcbor
           - zephyr
           - littlefs
+    - name: nfed
+      remote: nfed
+      repo-path: nrf9160-feather-examples-and-drivers
+      revision: v3.2.x
