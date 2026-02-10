@@ -16,19 +16,12 @@
 #include <zephyr/posix/sys/eventfd.h>
 #include "sm_util.h"
 #include "sm_at_host.h"
-#include "sm_at_socket.h"
 #include "sm_sockopt.h"
 
 LOG_MODULE_REGISTER(sm_sock, CONFIG_SM_LOG_LEVEL);
 
 #define SM_FDS_COUNT CONFIG_POSIX_OPEN_MAX
 #define SM_MAX_SOCKET_COUNT (SM_FDS_COUNT - 1)
-
-/**@brief Socket operations. */
-enum sm_socket_operation {
-	AT_SOCKET_OPEN = 0x1,
-	AT_SOCKET_OPEN6
-};
 
 /**@brief Socketopt operations. */
 enum sm_socketopt_operation {
@@ -98,7 +91,7 @@ static struct sm_socket {
 } socks[SM_MAX_SOCKET_COUNT];
 
 static struct sm_socket *datamode_sock; /* Socket for data mode */
-static char hex_data[1400 + 1]; /* Buffer for hex data conversion */
+static uint8_t bin_data[1400]; /* Buffer for hex2bin data conversion */
 
 static struct async_poll_ctx {
 	struct k_work poll_work;         /* Work to send poll URCs. */
@@ -496,18 +489,33 @@ static int do_socket_open(struct sm_socket *sock)
 	int ret = 0;
 	int proto = IPPROTO_TCP;
 
+	if (sock->family != NRF_AF_INET && sock->family != NRF_AF_INET6 &&
+	    sock->family != NRF_AF_PACKET) {
+		LOG_ERR("Socket family %d not supported", sock->family);
+		return -ENOTSUP;
+	}
+
+	if (sock->type == NRF_SOCK_RAW || sock->family == NRF_AF_PACKET) {
+		if (sock->type != NRF_SOCK_RAW || sock->family != NRF_AF_PACKET)  {
+			LOG_ERR("Raw socket: Family and type must match");
+			return -EINVAL;
+		}
+	}
+
 	if (sock->type == NRF_SOCK_STREAM) {
 		ret = nrf_socket(sock->family, NRF_SOCK_STREAM, NRF_IPPROTO_TCP);
 	} else if (sock->type == NRF_SOCK_DGRAM) {
 		ret = nrf_socket(sock->family, NRF_SOCK_DGRAM, NRF_IPPROTO_UDP);
 		proto = NRF_IPPROTO_UDP;
 	} else if (sock->type == NRF_SOCK_RAW) {
-		sock->family = NRF_SOCK_RAW;
-		sock->role = NRF_SO_SEC_ROLE_CLIENT;
+		if (sock->role != NRF_SO_SEC_ROLE_CLIENT)  {
+			LOG_ERR("Raw socket: Role must be client");
+			return -EINVAL;
+		}
 		ret = nrf_socket(sock->family, NRF_SOCK_RAW, NRF_IPPROTO_RAW);
 		proto = NRF_IPPROTO_IP;
 	} else {
-		LOG_ERR("socket type %d not supported", sock->type);
+		LOG_ERR("Socket type %d not supported", sock->type);
 		return -ENOTSUP;
 	}
 	if (ret < 0) {
@@ -553,8 +561,13 @@ static int do_secure_socket_open(struct sm_socket *sock, int peer_verify)
 	int ret = 0;
 	int proto = sock->type == NRF_SOCK_STREAM ? NRF_SPROTO_TLS1v2 : NRF_SPROTO_DTLS1v2;
 
+	if (sock->family != NRF_AF_INET && sock->family != NRF_AF_INET6) {
+		LOG_ERR("Socket family %d not supported", sock->family);
+		return -ENOTSUP;
+	}
+
 	if (sock->type != NRF_SOCK_STREAM && sock->type != NRF_SOCK_DGRAM) {
-		LOG_ERR("socket type %d not supported", sock->type);
+		LOG_ERR("Socket type %d not supported", sock->type);
 		return -ENOTSUP;
 	}
 
@@ -1004,17 +1017,18 @@ static int do_send(struct sm_socket *sock, const uint8_t *data, int len, int fla
 
 static int data_send_hex(struct sm_socket *sock, const uint8_t *buf, int recv_len)
 {
-	int consumed = 0;
-	char hex_buf[256] = {0};
-	uint16_t data_len = recv_len < (sizeof(hex_buf) / 2) ? recv_len : (sizeof(hex_buf) / 2);
+	size_t consumed = 0;
+	char hex_buf[257] = {0};
+	uint16_t data_len =
+		recv_len < (sizeof(hex_buf) - 1) / 2 ? recv_len : (sizeof(hex_buf) - 1) / 2;
 
 	/* For hex string mode, convert the received data to hex string */
 	while (consumed < recv_len) {
-		int size = sm_util_htoa(buf + consumed, data_len, hex_buf, sizeof(hex_buf));
+		size_t size = bin2hex(buf + consumed, data_len, hex_buf, sizeof(hex_buf));
 
-		if (size < 0) {
+		if (size == 0) {
 			LOG_ERR("Failed to convert binary data to hex string");
-			return size;
+			return -EINVAL;
 		}
 		data_send(hex_buf, size);
 		consumed += size / 2; /* size is in hex string length */
@@ -1230,54 +1244,50 @@ static int socket_datamode_callback(uint8_t op, const uint8_t *data, int len, ui
 }
 
 SM_AT_CMD_CUSTOM(xsocket, "AT#XSOCKET", handle_at_socket);
-static int handle_at_socket(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_socket(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			    uint32_t param_count)
 {
 	int err = -EINVAL;
-	uint16_t op;
 	struct sm_socket *sock = NULL;
 
 	switch (cmd_type) {
 	case AT_PARSER_CMD_TYPE_SET:
-		err = at_parser_num_get(parser, 1, &op);
-		if (err) {
-			return err;
+		sock = find_avail_socket();
+		if (sock == NULL) {
+			LOG_ERR("Max socket count reached");
+			err = -EINVAL;
+			goto error;
 		}
-		if (op == AT_SOCKET_OPEN || op == AT_SOCKET_OPEN6) {
-			sock = find_avail_socket();
-			if (sock == NULL) {
-				LOG_ERR("Max socket count reached");
+		init_socket(sock);
+
+		err = at_parser_num_get(parser, 1, &sock->family);
+		if (err) {
+			goto error;
+		}
+		err = at_parser_num_get(parser, 2, &sock->type);
+		if (err) {
+			goto error;
+		}
+		err = at_parser_num_get(parser, 3, &sock->role);
+		if (err) {
+			goto error;
+		}
+		if (param_count > 4) {
+			err = at_parser_num_get(parser, 4, &sock->cid);
+			if (err) {
+				goto error;
+			}
+			if (sock->cid > 10) {
 				err = -EINVAL;
 				goto error;
 			}
-			init_socket(sock);
-			err = at_parser_num_get(parser, 2, &sock->type);
-			if (err) {
-				goto error;
-			}
-			err = at_parser_num_get(parser, 3, &sock->role);
-			if (err) {
-				goto error;
-			}
-			sock->family = (op == AT_SOCKET_OPEN) ? NRF_AF_INET : NRF_AF_INET6;
-			if (param_count > 4) {
-				err = at_parser_num_get(parser, 4, &sock->cid);
-				if (err) {
-					goto error;
-				}
-				if (sock->cid > 10) {
-					err = -EINVAL;
-					goto error;
-				}
-			}
-			err = do_socket_open(sock);
-			if (err) {
-				LOG_ERR("do_socket_open() failed: %d", err);
-				goto error;
-			}
-		} else {
-			err = -EINVAL;
-		} break;
+		}
+		err = do_socket_open(sock);
+		if (err) {
+			LOG_ERR("do_socket_open() failed: %d", err);
+			goto error;
+		}
+		break;
 
 	case AT_PARSER_CMD_TYPE_READ:
 		for (int i = 0; i < SM_MAX_SOCKET_COUNT; i++) {
@@ -1292,8 +1302,8 @@ static int handle_at_socket(enum at_parser_cmd_type cmd_type, struct at_parser *
 		break;
 
 	case AT_PARSER_CMD_TYPE_TEST:
-		rsp_send("\r\n#XSOCKET: <handle>,(%d,%d),(%d,%d,%d),(%d,%d),<cid>\r\n",
-			AT_SOCKET_OPEN, AT_SOCKET_OPEN6,
+		rsp_send("\r\n#XSOCKET: <handle>,(%d,%d,%d),(%d,%d,%d),(%d,%d),<cid>\r\n",
+			AF_INET, AF_INET6, AF_PACKET,
 			SOCK_STREAM, SOCK_DGRAM, SOCK_RAW,
 			AT_SOCKET_ROLE_CLIENT, AT_SOCKET_ROLE_SERVER);
 		err = 0;
@@ -1312,82 +1322,78 @@ error:
 }
 
 SM_AT_CMD_CUSTOM(xssocket, "AT#XSSOCKET", handle_at_secure_socket);
-static int handle_at_secure_socket(enum at_parser_cmd_type cmd_type,
+STATIC int handle_at_secure_socket(enum at_parser_cmd_type cmd_type,
 				   struct at_parser *parser, uint32_t param_count)
 {
 	int err = -EINVAL;
-	uint16_t op;
 	struct sm_socket *sock = NULL;
 
 	switch (cmd_type) {
 	case AT_PARSER_CMD_TYPE_SET:
-		err = at_parser_num_get(parser, 1, &op);
-		if (err) {
-			return err;
+		sock = find_avail_socket();
+		if (sock == NULL) {
+			LOG_ERR("Max socket count reached");
+			err = -EINVAL;
+			goto error;
 		}
-		if (op == AT_SOCKET_OPEN || op == AT_SOCKET_OPEN6) {
-			/** Peer verification level for TLS connection.
-			 *    - 0 - none
-			 *    - 1 - optional
-			 *    - 2 - required
-			 * If not set, socket will use defaults (none for servers,
-			 * required for clients)
-			 */
-			uint16_t peer_verify;
+		init_socket(sock);
 
-			sock = find_avail_socket();
-			if (sock == NULL) {
-				LOG_ERR("Max socket count reached");
-				err = -EINVAL;
-				goto error;
-			}
-			init_socket(sock);
-			err = at_parser_num_get(parser, 2, &sock->type);
-			if (err) {
-				goto error;
-			}
-			err = at_parser_num_get(parser, 3, &sock->role);
-			if (err) {
-				goto error;
-			}
-			if (sock->role == AT_SOCKET_ROLE_SERVER) {
-				peer_verify = TLS_PEER_VERIFY_NONE;
-			} else if (sock->role == AT_SOCKET_ROLE_CLIENT) {
-				peer_verify = TLS_PEER_VERIFY_REQUIRED;
-			} else {
-				err = -EINVAL;
-				goto error;
-			}
-			sock->sec_tag = SEC_TAG_TLS_INVALID;
-			err = at_parser_num_get(parser, 4, &sock->sec_tag);
-			if (err) {
-				goto error;
-			}
-			if (param_count > 5) {
-				err = at_parser_num_get(parser, 5, &peer_verify);
-				if (err) {
-					goto error;
-				}
-			}
-			sock->family = (op == AT_SOCKET_OPEN) ? AF_INET : AF_INET6;
-			if (param_count > 6) {
-				err = at_parser_num_get(parser, 6, &sock->cid);
-				if (err) {
-					goto error;
-				}
-				if (sock->cid > 10) {
-					err = -EINVAL;
-					goto error;
-				}
-			}
-			err = do_secure_socket_open(sock, peer_verify);
-			if (err) {
-				LOG_ERR("do_secure_socket_open() failed: %d", err);
-				goto error;
-			}
+		err = at_parser_num_get(parser, 1, &sock->family);
+		if (err) {
+			goto error;
+		}
+		/** Peer verification level for TLS connection.
+		 *    - 0 - none
+		 *    - 1 - optional
+		 *    - 2 - required
+		 * If not set, socket will use defaults (none for servers,
+		 * required for clients)
+		 */
+		uint16_t peer_verify;
+
+		err = at_parser_num_get(parser, 2, &sock->type);
+		if (err) {
+			goto error;
+		}
+		err = at_parser_num_get(parser, 3, &sock->role);
+		if (err) {
+			goto error;
+		}
+		if (sock->role == AT_SOCKET_ROLE_SERVER) {
+			peer_verify = TLS_PEER_VERIFY_NONE;
+		} else if (sock->role == AT_SOCKET_ROLE_CLIENT) {
+			peer_verify = TLS_PEER_VERIFY_REQUIRED;
 		} else {
 			err = -EINVAL;
-		} break;
+			goto error;
+		}
+		sock->sec_tag = SEC_TAG_TLS_INVALID;
+		err = at_parser_num_get(parser, 4, &sock->sec_tag);
+		if (err) {
+			goto error;
+		}
+		if (param_count > 5) {
+			err = at_parser_num_get(parser, 5, &peer_verify);
+			if (err) {
+				goto error;
+			}
+		}
+		if (param_count > 6) {
+			err = at_parser_num_get(parser, 6, &sock->cid);
+			if (err) {
+				goto error;
+			}
+			if (sock->cid > 10) {
+				err = -EINVAL;
+				goto error;
+			}
+		}
+		err = do_secure_socket_open(sock, peer_verify);
+		if (err) {
+			LOG_ERR("do_secure_socket_open() failed: %d", err);
+			goto error;
+		}
+		break;
 
 	case AT_PARSER_CMD_TYPE_READ:
 		for (int i = 0; i < SM_MAX_SOCKET_COUNT; i++) {
@@ -1404,7 +1410,7 @@ static int handle_at_secure_socket(enum at_parser_cmd_type cmd_type,
 	case AT_PARSER_CMD_TYPE_TEST:
 		rsp_send("\r\n#XSSOCKET: <handle>,(%d,%d),(%d,%d),(%d,%d),"
 			 "<sec_tag>,<peer_verify>,<cid>\r\n",
-			AT_SOCKET_OPEN, AT_SOCKET_OPEN6,
+			AF_INET, AF_INET6,
 			SOCK_STREAM, SOCK_DGRAM,
 			AT_SOCKET_ROLE_CLIENT, AT_SOCKET_ROLE_SERVER);
 		err = 0;
@@ -1424,7 +1430,7 @@ error:
 }
 
 SM_AT_CMD_CUSTOM(xclose, "AT#XCLOSE", handle_at_close);
-static int handle_at_close(enum at_parser_cmd_type cmd_type,
+STATIC int handle_at_close(enum at_parser_cmd_type cmd_type,
 			   struct at_parser *parser, uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -1467,7 +1473,7 @@ static int handle_at_close(enum at_parser_cmd_type cmd_type,
 }
 
 SM_AT_CMD_CUSTOM(xsocketopt, "AT#XSOCKETOPT", handle_at_socketopt);
-static int handle_at_socketopt(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_socketopt(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			       uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -1525,7 +1531,7 @@ static int handle_at_socketopt(enum at_parser_cmd_type cmd_type, struct at_parse
 }
 
 SM_AT_CMD_CUSTOM(xssocketopt, "AT#XSSOCKETOPT", handle_at_secure_socketopt);
-static int handle_at_secure_socketopt(enum at_parser_cmd_type cmd_type,
+STATIC int handle_at_secure_socketopt(enum at_parser_cmd_type cmd_type,
 				      struct at_parser *parser, uint32_t)
 {
 	int err = -EINVAL;
@@ -1593,7 +1599,7 @@ static int handle_at_secure_socketopt(enum at_parser_cmd_type cmd_type,
 }
 
 SM_AT_CMD_CUSTOM(xbind, "AT#XBIND", handle_at_bind);
-static int handle_at_bind(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_bind(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			  uint32_t)
 {
 	int err = -EINVAL;
@@ -1626,7 +1632,7 @@ static int handle_at_bind(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 }
 
 SM_AT_CMD_CUSTOM(xconnect, "AT#XCONNECT", handle_at_connect);
-static int handle_at_connect(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_connect(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			     uint32_t)
 {
 	int err = -EINVAL;
@@ -1669,13 +1675,13 @@ static int handle_at_connect(enum at_parser_cmd_type cmd_type, struct at_parser 
 }
 
 SM_AT_CMD_CUSTOM(xsend, "AT#XSEND", handle_at_send);
-static int handle_at_send(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_send(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			  uint32_t param_count)
 {
 	int err = -EINVAL;
 	int fd;
 	uint16_t mode;
-	int size;
+	size_t size;
 	struct sm_socket *sock = NULL;
 	const char *str_ptr;
 	int data_len = 0;
@@ -1710,17 +1716,16 @@ static int handle_at_send(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 
 			/* Convert hex string to binary data */
 			if (mode == AT_SOCKET_MODE_HEX) {
-				err = sm_util_atoh(str_ptr, size, hex_data, sizeof(hex_data));
-				if (err < 0) {
+				size = hex2bin(str_ptr, size, bin_data, sizeof(bin_data));
+				if (size == 0) {
 					LOG_ERR("Failed to convert hex string to binary data");
-					return err;
+					return -EINVAL;
 				}
-				str_ptr = hex_data;
-				size = err;
+				str_ptr = (const char *)bin_data;
 			}
 
-			err = do_send(sock, str_ptr, size, sock->send_flags);
-			if (err == size) {
+			err = do_send(sock, (uint8_t *)str_ptr, (int)size, sock->send_flags);
+			if (err == (int)size) {
 				err = 0;
 			} else {
 				err = err < 0 ? err : -EAGAIN;
@@ -1750,7 +1755,7 @@ static int handle_at_send(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 }
 
 SM_AT_CMD_CUSTOM(xrecv, "AT#XRECV", handle_at_recv);
-static int handle_at_recv(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_recv(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			  uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -1807,14 +1812,14 @@ static int handle_at_recv(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 }
 
 SM_AT_CMD_CUSTOM(xsendto, "AT#XSENDTO", handle_at_sendto);
-static int handle_at_sendto(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_sendto(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			    uint32_t param_count)
 {
 
 	int err = -EINVAL;
 	int fd;
 	uint16_t mode;
-	int size;
+	size_t size;
 	struct sm_socket *sock = NULL;
 	const char *str_ptr;
 	int data_len = 0;
@@ -1858,17 +1863,17 @@ static int handle_at_sendto(enum at_parser_cmd_type cmd_type, struct at_parser *
 
 			/* Convert hex string to binary data */
 			if (mode == AT_SOCKET_MODE_HEX) {
-				err = sm_util_atoh(str_ptr, size, hex_data, sizeof(hex_data));
-				if (err < 0) {
+				size = hex2bin(str_ptr, size, bin_data, sizeof(bin_data));
+				if (size == 0) {
 					LOG_ERR("Failed to convert hex string to binary data");
-					return err;
+					return -EINVAL;
 				}
-				str_ptr = hex_data;
-				size = err;
+				str_ptr = (const char *)bin_data;
 			}
 
-			err = do_sendto(sock, udp_url, udp_port, str_ptr, size, sock->send_flags);
-			if (err == size) {
+			err = do_sendto(sock, udp_url, udp_port, (const uint8_t *)str_ptr,
+					(int)size, sock->send_flags);
+			if (err == (int)size) {
 				err = 0;
 			} else {
 				err = err < 0 ? err : -EAGAIN;
@@ -1899,7 +1904,7 @@ static int handle_at_sendto(enum at_parser_cmd_type cmd_type, struct at_parser *
 }
 
 SM_AT_CMD_CUSTOM(xrecvfrom, "AT#XRECVFROM", handle_at_recvfrom);
-static int handle_at_recvfrom(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_recvfrom(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			      uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -1956,7 +1961,7 @@ static int handle_at_recvfrom(enum at_parser_cmd_type cmd_type, struct at_parser
 }
 
 SM_AT_CMD_CUSTOM(xgetaddrinfo, "AT#XGETADDRINFO", handle_at_getaddrinfo);
-static int handle_at_getaddrinfo(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_getaddrinfo(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 				 uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -2088,7 +2093,7 @@ static int set_xapoll_events(struct sm_socket *sock, uint8_t events)
 }
 
 SM_AT_CMD_CUSTOM(xapoll, "AT#XAPOLL", handle_at_xapoll);
-static int handle_at_xapoll(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_xapoll(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 			  uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -2159,7 +2164,7 @@ static int handle_at_xapoll(enum at_parser_cmd_type cmd_type, struct at_parser *
 }
 
 SM_AT_CMD_CUSTOM(xrecvcfg, "AT#XRECVCFG", handle_at_recvcfg);
-static int handle_at_recvcfg(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
+STATIC int handle_at_recvcfg(enum at_parser_cmd_type cmd_type, struct at_parser *parser,
 				 uint32_t param_count)
 {
 	int err = -EINVAL;
@@ -2241,9 +2246,7 @@ static int handle_at_recvcfg(enum at_parser_cmd_type cmd_type, struct at_parser 
 	return err;
 }
 
-/**@brief API to initialize Socket AT commands handler
- */
-int sm_at_socket_init(void)
+static int sm_at_socket_init(void)
 {
 	for (int i = 0; i < SM_MAX_SOCKET_COUNT; i++) {
 		init_socket(&socks[i]);
@@ -2253,17 +2256,4 @@ int sm_at_socket_init(void)
 
 	return 0;
 }
-
-/**@brief API to uninitialize Socket AT commands handler
- */
-int sm_at_socket_uninit(void)
-{
-	for (int i = 0; i < SM_MAX_SOCKET_COUNT; i++) {
-		if (socks[i].fd != INVALID_SOCKET) {
-			do_socket_close(&socks[i]);
-		}
-	}
-	poll_ctx = (struct async_poll_ctx){0};
-
-	return 0;
-}
+SYS_INIT(sm_at_socket_init, APPLICATION, 0);

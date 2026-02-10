@@ -18,12 +18,7 @@ Configuration options
 
 CONFIG_SM_CUSTOMER_VERSION - Customer version string
    Version string defined by the customer after customizing the application.
-   When defined, this version is reported with the baseline versions by the ``#XSMVER`` AT command.
-
-.. _CONFIG_SM_AT_MAX_PARAM:
-
-CONFIG_SM_AT_MAX_PARAM - AT command parameter count limit
-   This defines the maximum number of parameters allowed in an AT command, including the command name.
+   When defined, this version is reported with the baseline versions by the ``AT#XSMVER`` AT command.
 
 .. _CONFIG_SM_AT_BUF_SIZE:
 
@@ -58,23 +53,92 @@ CONFIG_SM_AUTO_CONNECT - Connect to the network at start-up or reset
    This option enables connecting to the network at start-up or reset using a defined PDN configuration.
    This option is enabled by the LwM2M Carrier overlay, but is otherwise disabled by default.
 
-   .. note::
-      This option requires network-specific configuration in the ``sm_auto_connect.h`` file.
+   When enabled, the following sub-options are available for configuration:
 
-   Here is a sample configuration for NIDD connection in the :file:`sm_auto_connect.h` file::
+   .. _CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE:
 
-      /* Network-specific default system mode configured by %XSYSTEMMODE (refer to AT command manual) */
-      0,        /* LTE support */
-      1,        /* NB-IoT support */
-      0,        /* GNSS support, also define CONFIG_MODEM_ANTENNA if not Nordic DK */
-      0,        /* LTE preference */
-      /* Network-specific default PDN configured by +CGDCONT and +CGAUTH (refer to AT command manual) */
-      true,     /* PDP context definition required or not */
-      "Non-IP", /* PDP type: "IP", "IPV6", "IPV4V6", "Non-IP" */
-      "",       /* Access point name */
-      0,        /* PDP authentication protocol: 0(None), 1(PAP), 2(CHAP) */
-      "",       /* PDN connection authentication username */
-      ""        /* PDN connection authentication password */
+   CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE - System mode for automatic network attach
+      This option defines the system mode to use for automatic network attach.
+      The format is a comma-separated string of four single-digit integers: ``"X,Y,Z,W"``
+
+      Where:
+
+      * ``X`` = LTE-M support (0=disabled, 1=enabled)
+      * ``Y`` = NB-IoT support (0=disabled, 1=enabled)
+      * ``Z`` = GNSS support (0=disabled, 1=enabled)
+      * ``W`` = LTE preference (0=no preference, 1=LTE-M, 2=NB-IoT, 3=network selection, 4=LTE-M then NB-IoT)
+
+      See the `%XSYSTEMMODE`_ command in the AT command Reference Guide for more details.
+      The default value is ``"1,1,1,0"`` (enable LTE-M, NB-IoT, and GNSS with no preference).
+
+   .. _CONFIG_SM_AUTO_CONNECT_PDN_CONFIG:
+
+   CONFIG_SM_AUTO_CONNECT_PDN_CONFIG - Enable PDN configuration
+      This option enables sending of PDN configuration commands during automatic network attach.
+      When enabled, the following sub-options become available:
+
+      .. _CONFIG_SM_AUTO_CONNECT_PDN_APN:
+
+      CONFIG_SM_AUTO_CONNECT_PDN_APN - Access Point Name (APN)
+         This option specifies the APN to use for automatic network attach.
+         If not set (default), the APN configured in the modem will be used.
+
+      .. _CONFIG_SM_AUTO_CONNECT_PDN_FAMILY:
+
+      CONFIG_SM_AUTO_CONNECT_PDN_FAMILY - PDN family (IP type)
+         This choice option selects the PDN family (IP address type) to use for automatic network attach.
+         See the `+CGDCONT`_ command in the AT command Reference Guide for more details.
+
+         Available options:
+
+         * ``CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_IP`` - Use IPv4 only
+         * ``CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_IPV6`` - Use IPv6 only
+         * ``CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_IPV4V6`` - Use both IPv4 and IPv6 (dual stack, default)
+         * ``CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_NON_IP`` - Use Non-IP PDN type for data transmission without IP headers
+
+      .. _CONFIG_SM_AUTO_CONNECT_PDN_AUTH:
+
+      CONFIG_SM_AUTO_CONNECT_PDN_AUTH - PDN authentication type
+         This option specifies the PDN authentication protocol to use for automatic network attach.
+         See the `+CGAUTH`_ command in the AT command Reference Guide for more details.
+
+         Valid values:
+
+         * ``0`` - None (no authentication, default)
+         * ``1`` - PAP (Password Authentication Protocol)
+         * ``2`` - CHAP (Challenge Handshake Authentication Protocol)
+
+      .. _CONFIG_SM_AUTO_CONNECT_PDN_USERNAME:
+
+      CONFIG_SM_AUTO_CONNECT_PDN_USERNAME - PDN authentication username
+         This option specifies the username to use for PDN authentication during automatic network attach.
+         Do not set the Kconfig option (default) if no username is required.
+         Use only when ``CONFIG_SM_AUTO_CONNECT_PDN_AUTH`` is set to 1 (PAP) or 2 (CHAP).
+
+      .. _CONFIG_SM_AUTO_CONNECT_PDN_PASSWORD:
+
+      CONFIG_SM_AUTO_CONNECT_PDN_PASSWORD - PDN authentication password
+         This option specifies the password to use for PDN authentication during automatic network attach.
+         Leave empty (default) if no password is required.
+         Use only when ``CONFIG_SM_AUTO_CONNECT_PDN_AUTH`` is set to 1 (PAP) or 2 (CHAP).
+
+   Example configuration overlay for NB-IoT with Non-IP PDN::
+
+      CONFIG_SM_AUTO_CONNECT=y
+      CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE="0,1,0,0"
+      CONFIG_SM_AUTO_CONNECT_PDN_CONFIG=y
+      CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_NON_IP=y
+
+   Example configuration overlay for LTE-M with custom APN and PAP authentication::
+
+      CONFIG_SM_AUTO_CONNECT=y
+      CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE="1,0,0,0"
+      CONFIG_SM_AUTO_CONNECT_PDN_CONFIG=y
+      CONFIG_SM_AUTO_CONNECT_PDN_APN="internet"
+      CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_IPV4V6=y
+      CONFIG_SM_AUTO_CONNECT_PDN_AUTH=1
+      CONFIG_SM_AUTO_CONNECT_PDN_USERNAME="myuser"
+      CONFIG_SM_AUTO_CONNECT_PDN_PASSWORD="mypass"
 
 .. _CONFIG_SM_CR_TERMINATION:
 
@@ -166,7 +230,7 @@ CONFIG_SM_PGPS_INJECT_FIX_DATA - Injects the data obtained when acquiring a fix.
 .. _CONFIG_SM_DFU_MODEM_FULL:
 
 CONFIG_SM_DFU_MODEM_FULL - Enable full modem DFU
-   This option enables support for full modem firmware updates using the ``#XDFUINIT``, ``#XDFUWRITE``, and ``#XDFUAPPLY`` commands.
+   This option enables support for full modem firmware updates using the ``AT#XDFUINIT``, ``AT#XDFUWRITE``, and ``AT#XDFUAPPLY`` commands.
    See the :ref:`DFU_AT_commands` for more information.
 
 .. _sm_config_files:
@@ -215,13 +279,9 @@ The following configuration files are provided:
   This disables most of the IP-based protocols available through AT commands (such as MQTT) as it is expected that the controlling chip's own IP stack is used instead.
   See :ref:`CONFIG_SM_PPP <CONFIG_SM_PPP>` and :ref:`SM_AT_PPP` for more information.
 
-* :file:`overlay-ppp-without-cmux.conf` - Configuration file that enables support for the second UART to be used by PPP.
-  This configuration file should be included when building |SM| with PPP and without CMUX, in addition to :file:`overlay-ppp.conf` and :file:`overlay-ppp-without-cmux.overlay`.
-
-* :file:`overlay-ppp-without-cmux.overlay` - Devicetree overlay that configures the second UART to be used by PPP.
-  This configuration file should be included when building |SM| with PPP and without CMUX, in addition to :file:`overlay-ppp.conf` and :file:`overlay-ppp-without-cmux.conf`.
-  It can be customized to fit your configuration, such as UART settings, baud rate, and flow control.
-  By default, it sets the baud rate of the PPP UART to 1 000 000.
+* :file:`overlay-trace-backend-cmux.conf` - Configuration file that enables CMUX modem trace backend.
+  When enabled, modem traces are transmitted on a dedicated CMUX channel.
+  See the :ref:`sm_modem_trace_cmux` documentation for more information.
 
 * :file:`overlay-memfault.conf` - Configuration file that enables `Memfault`_.
   For more information about Memfault features in |NCS|, see the `Memfault library`_ docs.

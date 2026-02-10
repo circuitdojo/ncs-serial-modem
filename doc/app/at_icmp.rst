@@ -24,23 +24,32 @@ Syntax
 
 ::
 
-   #XPING=<url>,<length>,<timeout>[,<count>[,<interval>[,<pdn>]]]
+   AT#XPING=<url>,<length>,<timeout>[,<count>[,<interval>[,<pdn>]]]
 
 * The ``<url>`` parameter is a string.
   It represents the hostname, the IPv4, or the IPv6 address of the target host.
 * The ``<length>`` parameter is an integer.
   It represents the length of the buffer size.
+  The value range is ``0`` to ``65535``.
 * The ``<timeout>`` parameter is an integer.
   It represents the time to wait for each reply, in milliseconds.
+  The value range is ``0`` to ``4294967295``.
 * The ``<count>`` parameter is an integer.
   It represents the number of echo requests to send.
-  Its default value is ``1``.
+  The default value is ``1``.
+  The value range is ``1`` to ``65535``.
 * The ``<interval>`` parameter is an integer.
   It represents the time to wait for sending the next echo request, in milliseconds.
-  Its default value is ``1000``.
+  The default value is ``1000``.
+  The value range is ``0`` to ``4294967295``.
 * The ``<pdn>`` parameter is an integer.
   It represents ``cid`` in the ``+CGDCONT`` command.
-  Its default value is ``0``.
+  The default value is ``0``.
+
+  .. note::
+
+     Other sockets cannot use the same PDN connection.
+     See :ref:`SM_AT_SOCKET_RAW_SOCKET_LIMITATION` for more information.
 
 Unsolicited notification
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -49,7 +58,7 @@ Unsolicited notification
 
    #XPING: <response time> seconds
 
-The ``<response time>`` value is a *float*.
+The ``<response time>`` parameter is a *float*.
 It represents the elapsed time, in seconds, between the echo requests and the echo replies.
 
 Example

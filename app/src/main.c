@@ -16,17 +16,14 @@
 #include "sm_at_host.h"
 #include "sm_at_dfu.h"
 #include "sm_at_fota.h"
-#include "sm_settings.h"
 #include "sm_util.h"
 #include "sm_ctrl_pin.h"
+#include "sm_uart_handler.h"
 
 LOG_MODULE_REGISTER(sm, CONFIG_SM_LOG_LEVEL);
 
-#define SM_WQ_STACK_SIZE	KB(4)
-#define SM_WQ_PRIORITY		K_LOWEST_APPLICATION_THREAD_PRIO
-static K_THREAD_STACK_DEFINE(sm_wq_stack_area, SM_WQ_STACK_SIZE);
-
 struct k_work_q sm_work_q;
+bool sm_init_failed = false;
 
 NRF_MODEM_LIB_ON_INIT(lwm2m_init_hook, on_modem_lib_init, NULL);
 NRF_MODEM_LIB_ON_DFU_RES(main_dfu_hook, on_modem_dfu_res, NULL);
@@ -147,16 +144,6 @@ static int bootloader_mode_init(void)
 	}
 	LOG_INF("Bootloader mode initiated successfully");
 
-	ret = sm_ctrl_pin_init();
-	if (ret) {
-		LOG_ERR("Failed to init ctrl_pin: %d", ret);
-		return ret;
-	}
-
-	k_work_queue_start(&sm_work_q, sm_wq_stack_area,
-		K_THREAD_STACK_SIZEOF(sm_wq_stack_area),
-		SM_WQ_PRIORITY, NULL);
-
 	ret = sm_at_host_bootloader_init();
 	if (ret) {
 		LOG_ERR("Failed to init at_host: %d", ret);
@@ -174,99 +161,79 @@ static int bootloader_mode_init(void)
 	return 0;
 }
 
-int lte_auto_connect(void)
+void lte_auto_connect(void)
 {
-	int err = 0;
 #if defined(CONFIG_SM_AUTO_CONNECT)
-	int ret;
+	int err;
 	int n;
 	int stat;
-	struct network_config {
-		/* Refer to AT command manual of %XSYSTEMMODE for system mode settings */
-		int lte_m_support;     /* 0 ~ 1 */
-		int nb_iot_support;    /* 0 ~ 1 */
-		int gnss_support;      /* 0 ~ 1 */
-		int lte_preference;    /* 0 ~ 4 */
-		/* Refer to AT command manual of +CGDCONT and +CGAUTH for PDN configuration */
-		bool pdp_config;       /* PDP context definition required or not */
-		char *pdn_fam;         /* PDP type: "IP", "IPV6", "IPV4V6", "Non-IP" */
-		char *pdn_apn;         /* Access point name */
-		int pdn_auth;          /* PDN authentication protocol 0(None), 1(PAP), 2(CHAP) */
-		char *pdn_username;    /* PDN connection authentication username */
-		char *pdn_password;    /* PDN connection authentication password */
-	};
-	const struct network_config cfg = {
-#include "sm_auto_connect.h"
-	};
 
-	ret = sm_util_at_scanf("AT+CEREG?", "+CEREG: %d,%d", &n, &stat);
-	if (ret != 2 || (stat == 1 || stat == 5)) {
-		return 0;
+	err = sm_util_at_scanf("AT+CEREG?", "+CEREG: %d,%d", &n, &stat);
+	if (err != 2 || (stat == 1 || stat == 5)) {
+		return;
 	}
 
 	LOG_INF("LTE auto connect");
-	err = sm_util_at_printf("AT%%XSYSTEMMODE=%d,%d,%d,%d", cfg.lte_m_support,
-				  cfg.nb_iot_support, cfg.gnss_support, cfg.lte_preference);
+	LOG_DBG("Configuring system mode: %s", CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE);
+	err = sm_util_at_printf("AT%%XSYSTEMMODE=%s", CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE);
 	if (err) {
-		LOG_ERR("Failed to configure system mode: %d", err);
-		return err;
+		LOG_ERR("Failed to configure system mode \"%s\": %d",
+			CONFIG_SM_AUTO_CONNECT_SYSTEM_MODE, err);
+		return;
 	}
-	if (cfg.pdp_config) {
-		err = sm_util_at_printf("AT+CGDCONT=0,%s,%s", cfg.pdn_fam, cfg.pdn_apn);
-		if (err) {
-			LOG_ERR("Failed to configure PDN: %d", err);
-			return err;
-		}
+
+#if defined(CONFIG_SM_AUTO_CONNECT_PDN_CONFIG)
+	err = sm_util_at_printf("AT+CGDCONT=0,%s,%s", CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_STRING,
+				CONFIG_SM_AUTO_CONNECT_PDN_APN);
+	if (err) {
+		LOG_ERR("Failed to configure PDN: %d", err);
+		return;
 	}
-	if (cfg.pdp_config && cfg.pdn_auth != 0) {
-		err = sm_util_at_printf("AT+CGAUTH=0,%d,%s,%s", cfg.pdn_auth,
-					  cfg.pdn_username, cfg.pdn_password);
+	LOG_DBG("PDN configured: APN=\"%s\", PDN type=\"%s\"", CONFIG_SM_AUTO_CONNECT_PDN_APN,
+		CONFIG_SM_AUTO_CONNECT_PDN_FAMILY_STRING);
+
+	if (CONFIG_SM_AUTO_CONNECT_PDN_AUTH != 0) {
+		err = sm_util_at_printf("AT+CGAUTH=0,%d,%s,%s", CONFIG_SM_AUTO_CONNECT_PDN_AUTH,
+					CONFIG_SM_AUTO_CONNECT_PDN_USERNAME,
+					CONFIG_SM_AUTO_CONNECT_PDN_PASSWORD);
 		if (err) {
 			LOG_ERR("Failed to configure AUTH: %d", err);
-			return err;
+			return;
 		}
+		LOG_DBG("PDN AUTH configured: protocol=%d, username=\"%s\"",
+			CONFIG_SM_AUTO_CONNECT_PDN_AUTH, CONFIG_SM_AUTO_CONNECT_PDN_USERNAME);
 	}
+#endif /* CONFIG_SM_AUTO_CONNECT_PDN_CONFIG */
+
 	err = sm_util_at_printf("AT+CFUN=1");
 	if (err) {
 		LOG_ERR("Failed to turn on radio: %d", err);
-		return err;
+		return;
 	}
-#endif /* CONFIG_SM_AUTO_CONNECT */
 
-	return err;
+#endif /* CONFIG_SM_AUTO_CONNECT */
 }
 
-int start_execute(void)
+static int init_sm_work_q(void)
 {
-	int err;
+	k_work_queue_init(&sm_work_q);
+	return 0;
+}
+SYS_INIT(init_sm_work_q, PRE_KERNEL_1, 0);
 
-	LOG_INF("Serial Modem");
+int main(void)
+{
+	static const struct k_work_queue_config cfg = {
+		.name = "sm_work_q",
+		.essential = true,
+	};
 
-	err = sm_ctrl_pin_init();
-	if (err) {
-		LOG_ERR("Failed to init ctrl_pin: %d", err);
-		return err;
-	}
-
-	k_work_queue_start(&sm_work_q, sm_wq_stack_area,
-		   K_THREAD_STACK_SIZEOF(sm_wq_stack_area),
-		   SM_WQ_PRIORITY, NULL);
-
-	/* This will send "READY" or "INIT ERROR" to UART so after this nothing
-	 * should be done that can fail
-	 */
-	err = sm_at_host_init();
-	if (err) {
-		LOG_ERR("Failed to init at_host: %d", err);
-		return err;
-	}
-
-	(void)lte_auto_connect();
-
+	k_thread_priority_set(k_current_get(), K_LOWEST_APPLICATION_THREAD_PRIO);
+	k_work_queue_run(&sm_work_q, &cfg);
 	return 0;
 }
 
-int main(void)
+static int sm_main(void)
 {
 	int ret;
 
@@ -274,13 +241,6 @@ int main(void)
 
 	nrf_power_resetreas_clear(NRF_POWER_NS, 0x70017);
 	LOG_DBG("RR: 0x%08x", rr);
-
-	sm_ctrl_pin_init_gpios();
-
-	/* Init and load settings */
-	if (sm_settings_init() != 0) {
-		LOG_WRN("Failed to init sm settings");
-	}
 
 	if (sm_bootloader_mode_requested) {
 		/* Clear bootloader mode flag */
@@ -293,8 +253,14 @@ int main(void)
 				LOG_ERR("Failed to initialize bootloader mode: %d", ret);
 				goto exit_reboot;
 			}
-			goto exit;
+			return ret;
 		}
+	}
+
+	ret = sm_uart_handler_enable();
+	if (ret) {
+		LOG_ERR("Failed to enable UART handler (%d).", ret);
+		return ret;
 	}
 
 #if defined(CONFIG_SM_FULL_FOTA)
@@ -309,7 +275,7 @@ int main(void)
 	if (ret) {
 		LOG_ERR("Modem library init failed, err: %d", ret);
 		if (ret != -EAGAIN && ret != -EIO) {
-			goto exit;
+			return ret;
 		} else if (ret == -EIO) {
 			LOG_ERR("Please program full modem firmware with the bootloader or "
 				"external tools");
@@ -320,21 +286,29 @@ int main(void)
 
 	check_app_fota_status();
 
-#if DT_HAS_CHOSEN(ncs_sm_power_key)
-	if (!(rr & NRF_POWER_RESETREAS_OFF_MASK)) { /* DETECT signal from GPIO */
-
-		sm_ctrl_pin_enter_sleep_no_uninit(true);
+	if (sm_init_failed) {
+		ret = sm_at_send_str(SM_SYNC_ERR_STR);
+	} else {
+		ret = sm_at_send_str(SM_SYNC_STR);
 	}
-#endif
 
-	ret = start_execute();
-exit:
 	if (ret) {
-		LOG_ERR("Failed to start SM (%d). It's not operational!!!", ret);
+		return ret;
 	}
+
+	/* This is here and not earlier because in case of firmware
+	 * update it will send an AT response so the UART must be up.
+	 */
+	sm_fota_post_process();
+
+	lte_auto_connect();
+
+	LOG_INF("Serial Modem");
+
 	return ret;
 
 exit_reboot:
 	LOG_PANIC();
 	sys_reboot(SYS_REBOOT_COLD);
 }
+SYS_INIT(sm_main, APPLICATION, 100);

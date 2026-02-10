@@ -29,8 +29,8 @@ Syntax
 
 ::
 
-   E1 - Enable AT command echo.
-   E0 - Disable AT command echo (default).
+   ATE1 - Enable AT command echo.
+   ATE0 - Disable AT command echo (default).
 
 Example
 ~~~~~~~
@@ -78,7 +78,7 @@ Syntax
 
 ::
 
-   #XSMVER
+   AT#XSMVER
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -87,11 +87,11 @@ Response syntax
 
    #XSMVER: <sm_version>,<ncs_version>[,<customer_version>]
 
-The ``<sm_version>`` value is the version of the |SM| application.
+The ``<sm_version>`` parameter is the version of the |SM| application.
 
-The ``<ncs_version>`` value is a string containing the version of the |NCS|.
+The ``<ncs_version>`` parameter is a string containing the version of the |NCS|.
 
-The ``<customer_version>`` value is the :ref:`CONFIG_SM_CUSTOMER_VERSION <CONFIG_SM_CUSTOMER_VERSION>` string, if defined.
+The ``<customer_version>`` parameter is the :ref:`CONFIG_SM_CUSTOMER_VERSION <CONFIG_SM_CUSTOMER_VERSION>` string, if defined.
 
 Example
 ~~~~~~~
@@ -141,7 +141,7 @@ Syntax
 
 ::
 
-   #XCLAC
+   AT#XCLAC
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -150,7 +150,7 @@ Response syntax
 
    <command list>
 
-The ``<command list>`` value returns a list of values representing all the ``#X*`` commands followed by <CR><LF>.
+The ``<command list>`` parameter returns a list of values representing all the ``#X*`` commands followed by <CR><LF>.
 
 Example
 ~~~~~~~
@@ -182,6 +182,10 @@ Test command
 
 The test command is not supported.
 
+.. include:: sm_data_mode.rst
+   :start-after: sm_data_mode_at_cmd_start
+   :end-before: sm_data_mode_at_cmd_end
+
 Power saving #XSLEEP
 ====================
 
@@ -209,7 +213,7 @@ Syntax
 
 ::
 
-   #XSLEEP=<sleep_mode>
+   AT#XSLEEP=<sleep_mode>
 
 The ``<sleep_mode>`` parameter accepts only the following integer values:
 
@@ -276,7 +280,7 @@ Syntax
 
 ::
 
-   #XSLEEP=?
+   AT#XSLEEP=?
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -290,6 +294,7 @@ Example
 
 ::
 
+   AT#XSLEEP=?
    #XSLEEP: (1,2)
    OK
 
@@ -308,7 +313,7 @@ Syntax
 
 ::
 
-   #XSHUTDOWN
+   AT#XSHUTDOWN
 
 .. note::
 
@@ -348,7 +353,7 @@ Syntax
 
 ::
 
-   #XRESET
+   AT#XRESET
 
 Example
 ~~~~~~~~
@@ -388,7 +393,7 @@ Syntax
 
 ::
 
-   #XMODEMRESET
+   AT#XMODEMRESET
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -442,7 +447,7 @@ Syntax
 
 ::
 
-   #XUUID
+   AT#XUUID
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -451,7 +456,7 @@ Response syntax
 
    #XUUID: <device-uuid>
 
-The ``<device-uuid>`` value returns a string indicating the UUID of the device.
+The ``<device-uuid>`` parameter returns a string indicating the UUID of the device.
 
 Example
 ~~~~~~~
@@ -489,8 +494,8 @@ The application sends the following unsolicited notification when it detects a m
 
    #XMODEM: FAULT,<reason>,<program_count>
 
-The ``<reason>`` value returns a hexadecimal integer indicating the reason of the modem fault.
-The ``<program_count>`` value returns a hexadecimal integer indicating the address of the modem fault.
+The ``<reason>`` parameter returns a hexadecimal integer indicating the reason of the modem fault.
+The ``<program_count>`` parameter returns a hexadecimal integer indicating the address of the modem fault.
 
 The application sends the following unsolicited notification when it shuts down libmodem:
 
@@ -498,7 +503,7 @@ The application sends the following unsolicited notification when it shuts down 
 
    #XMODEM: SHUTDOWN,<result>
 
-The ``<result>`` value returns an integer indicating the result of the shutdown of libmodem.
+The ``<result>`` parameter returns an integer indicating the result of the shutdown of libmodem.
 
 The application sends the following unsolicited notification when it re-initializes libmodem:
 
@@ -506,7 +511,7 @@ The application sends the following unsolicited notification when it re-initiali
 
    #XMODEM: INIT,<result>
 
-The ``<result>`` value returns an integer indicating the result of the re-initialization of libmodem.
+The ``<result>`` parameter returns an integer indicating the result of the re-initialization of libmodem.
 
 .. note::
    After libmodem is re-initialized, the MCU side must restart the current active service as follows:

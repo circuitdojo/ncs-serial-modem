@@ -278,7 +278,7 @@ static int cmux_write_at_channel(const uint8_t *data, size_t len, bool urc)
 	/* To process, CMUX needs system work queue to be able to run.
 	 * Send only from Serial Modem work queue to guarantee URC ordering.
 	 */
-	if (k_current_get() == &sm_work_q.thread && !urc) {
+	if (k_current_get() == k_work_queue_thread_get(&sm_work_q) && !urc) {
 		ret = cmux_write_at_channel_block(data, &len);
 	} else {
 		/* In other contexts, we buffer until Serial Modem work queue becomes available. */
@@ -297,12 +297,12 @@ static void close_pipe(struct modem_pipe **pipe)
 	}
 }
 
-static bool cmux_is_started(void)
+bool sm_cmux_is_started(void)
 {
 	return (cmux.uart_pipe != NULL);
 }
 
-void sm_cmux_init(void)
+static int sm_cmux_init(void)
 {
 	const struct modem_cmux_config cmux_config = {
 		.callback = cmux_event_handler,
@@ -327,11 +327,18 @@ void sm_cmux_init(void)
 
 	cmux.at_channel = 0;
 	cmux.requested_at_channel = UINT_MAX;
+	return 0;
 }
+SYS_INIT(sm_cmux_init, APPLICATION, 0);
 
-void sm_cmux_uninit(void)
+static void stop_work_fn(struct k_work *work)
 {
-	if (cmux_is_started()) {
+	int err;
+
+	ARG_UNUSED(work);
+
+	/* Will stop the UART when calling the close_pipe() function. */
+	if (sm_cmux_is_started()) {
 		modem_cmux_release(&cmux.instance);
 
 		close_pipe(&cmux.uart_pipe);
@@ -342,16 +349,6 @@ void sm_cmux_uninit(void)
 		}
 		sm_at_host_urc_ctx_release(cmux.urc_ctx, SM_URC_OWNER_CMUX);
 	}
-}
-
-static void stop_work_fn(struct k_work *work)
-{
-	int err;
-
-	ARG_UNUSED(work);
-
-	/* Will stop the UART when calling the close_pipe() function. */
-	sm_cmux_uninit();
 
 	err = sm_uart_handler_enable();
 	if (err) {
@@ -370,10 +367,9 @@ static struct cmux_dlci *cmux_get_dlci(enum cmux_channel channel)
 		return &cmux.dlcis[!cmux.at_channel];
 	}
 #endif
-#if defined(CONFIG_SM_GNSS_OUTPUT_NMEA_ON_CMUX_CHANNEL)
-	if (channel == CMUX_GNSS_CHANNEL) {
-		/* The last DLCI. */
-		return &cmux.dlcis[CHANNEL_COUNT - 1];
+#if defined(CONFIG_SM_MODEM_TRACE_BACKEND_CMUX)
+	if (channel == CMUX_MODEM_TRACE_CHANNEL) {
+		return &cmux.dlcis[CMUX_MODEM_TRACE_CHANNEL + 1];
 	}
 #endif
 	assert(false);
@@ -388,6 +384,13 @@ struct modem_pipe *sm_cmux_reserve(enum cmux_channel channel)
 	return cmux_get_dlci(channel)->pipe;
 }
 
+bool sm_cmux_dlci_is_open(enum cmux_channel channel)
+{
+	struct cmux_dlci *dlci = cmux_get_dlci(channel);
+
+	return (dlci->instance.state == MODEM_CMUX_DLCI_STATE_OPEN);
+}
+
 void sm_cmux_release(enum cmux_channel channel)
 {
 	struct cmux_dlci *dlci = cmux_get_dlci(channel);
@@ -397,6 +400,8 @@ void sm_cmux_release(enum cmux_channel channel)
 	 */
 	if (channel == CMUX_PPP_CHANNEL && cmux.at_channel != 0) {
 		cmux.at_channel = 0;
+		/* Don't start PPP anymore as the PPP channel have changed */
+		sm_ppp_set_auto_start(false);
 	}
 	modem_pipe_attach(dlci->pipe, dlci_pipe_event_handler, dlci);
 }
@@ -405,7 +410,7 @@ static int cmux_start(void)
 {
 	int ret;
 
-	if (cmux_is_started()) {
+	if (sm_cmux_is_started()) {
 		ret = modem_pipe_open(cmux.uart_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
 		if (!ret) {
 			cmux.uart_pipe_open = true;
@@ -454,7 +459,7 @@ static int handle_at_cmux(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 		return -EINVAL;
 	}
 
-	if (param_count == 1 && cmux_is_started()) {
+	if (param_count == 1 && sm_cmux_is_started()) {
 		return -EALREADY;
 	}
 
@@ -471,7 +476,7 @@ static int handle_at_cmux(enum at_parser_cmd_type cmd_type, struct at_parser *pa
 			return -ENOTSUP;
 		}
 #endif
-		if (cmux_is_started()) {
+		if (sm_cmux_is_started()) {
 			/* Update the AT channel after answering "OK" on the current DLCI. */
 			cmux.requested_at_channel = at_channel;
 			rsp_send_ok();
@@ -499,7 +504,7 @@ static int handle_at_cmuxcld(enum at_parser_cmd_type cmd_type, struct at_parser 
 		return -EINVAL;
 	}
 
-	if (!cmux_is_started() || !cmux.uart_pipe_open) {
+	if (!sm_cmux_is_started() || !cmux.uart_pipe_open) {
 		return -EALREADY;
 	}
 

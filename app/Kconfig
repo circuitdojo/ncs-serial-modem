@@ -13,21 +13,12 @@ config SM_CUSTOMER_VERSION
 	help
 	   This version is reported together with baseline versions by AT command "#XSMVER".
 
-config SM_AT_MAX_PARAM
-	int "Maximum number of parameters in AT command"
-	default 42
-
 config SM_AT_BUF_SIZE
 	int "AT command buffer size"
 	range 128 8192
 	default 4096
 	help
 	  Size of the buffer for incoming AT commands and modem responses.
-
-config SM_SKIP_READY_MSG
-	bool "Skip ready message"
-	help
-	  Skip sending the ready message when the application is powered on.
 
 #
 # external XTAL for UART
@@ -132,7 +123,97 @@ config SM_URC_DELAY_WITH_INCOMPLETE_ECHO_MS
 config SM_AUTO_CONNECT
 	bool "Automatically connect to the network on start-up or after a reset"
 	help
-	  Enables automatic connection to the network using the PDN configuration defined in 'SM_auto_connect.h'.
+	  Enables automatic connection to the network using the PDN configuration.
+
+if SM_AUTO_CONNECT
+
+config SM_AUTO_CONNECT_SYSTEM_MODE
+	string "System mode for automatic network attach"
+	default "1,1,1,0"
+	help
+	  Defines the default system mode using '%XSYSTEMMODE' AT command for automatic network attach.
+	  The format is a comma-separated list of four integers. See the AT command reference for +XSYSTEMMODE for more details.
+	  Default value enables LTE-M, NB-IoT, and GNSS, with no LTE preference.
+
+config SM_AUTO_CONNECT_PDN_CONFIG
+	bool "PDN configuration for automatic network attach"
+	help
+	  Enables sending of PDN configuration during automatic network attach.
+
+if SM_AUTO_CONNECT_PDN_CONFIG
+
+config SM_AUTO_CONNECT_PDN_APN
+	string "APN for automatic network attach"
+	default ""
+	help
+	  APN to use for automatic network attach.
+	  If left empty, the APN configured in the modem will be used.
+
+choice SM_AUTO_CONNECT_PDN_FAMILY
+	prompt "PDN family (IP type) for automatic network attach"
+	default SM_AUTO_CONNECT_PDN_FAMILY_IPV4V6
+	help
+	  Select the PDN family (IP address type) to use for automatic network attach.
+	  See AT command reference for +CGDCONT for more details.
+
+config SM_AUTO_CONNECT_PDN_FAMILY_IP
+	bool "IPv4"
+	help
+	  Use IPv4 only for the PDN connection.
+
+config SM_AUTO_CONNECT_PDN_FAMILY_IPV6
+	bool "IPv6"
+	help
+	  Use IPv6 only for the PDN connection.
+
+config SM_AUTO_CONNECT_PDN_FAMILY_IPV4V6
+	bool "IPv4 and IPv6"
+	help
+	  Use both IPv4 and IPv6 for the PDN connection (dual stack).
+
+config SM_AUTO_CONNECT_PDN_FAMILY_NON_IP
+	bool "Non-IP"
+	help
+	  Use Non-IP PDN type for the connection.
+	  This is used for data transmission without IP headers.
+
+endchoice
+
+config SM_AUTO_CONNECT_PDN_FAMILY_STRING
+	string
+	default "IP" if SM_AUTO_CONNECT_PDN_FAMILY_IP
+	default "IPV6" if SM_AUTO_CONNECT_PDN_FAMILY_IPV6
+	default "IPV4V6" if SM_AUTO_CONNECT_PDN_FAMILY_IPV4V6
+	default "Non-IP" if SM_AUTO_CONNECT_PDN_FAMILY_NON_IP
+	help
+	  Internal use only. Represents the selected PDN family as a string.
+
+config SM_AUTO_CONNECT_PDN_AUTH
+	int "PDN authentication type for automatic network attach"
+	default 0
+	range 0 2
+	help
+	  PDN authentication type to use for automatic network attach.
+	  0 = None
+	  1 = PAP
+	  2 = CHAP
+
+config SM_AUTO_CONNECT_PDN_USERNAME
+	string "PDN username for automatic network attach"
+	default ""
+	help
+	  PDN username to use for automatic network attach.
+	  Leave empty if no username is required.
+
+config SM_AUTO_CONNECT_PDN_PASSWORD
+	string "PDN password for automatic network attach"
+	default ""
+	help
+	  PDN password to use for automatic network attach.
+	  Leave empty if no password is required.
+
+endif # SM_AUTO_CONNECT_PDN_CONFIG
+endif # SM_AUTO_CONNECT
 
 #
 # Data mode
@@ -142,11 +223,6 @@ config SM_DATAMODE_TERMINATOR
 	default "+++"
 	help
 	  Use a pattern to terminate data mode
-
-config SM_DATAMODE_URC
-	bool "Send URC in data mode"
-	help
-	  Report result of data mode sending
 
 config SM_DATAMODE_BUF_SIZE
 	int "Buffer size for data mode"
@@ -224,14 +300,10 @@ endif # SM_MQTTC
 
 if SM_GNSS
 
-config SM_GNSS_OUTPUT_NMEA_ON_CMUX_CHANNEL
-	bool "Output NMEA messages on a dedicated CMUX channel"
-	depends on SM_CMUX
-
 config SM_GNSS_OUTPUT_NMEA_SATELLITES
 	bool "Output NMEA satellite messages (GSV, GSA)"
 	default y if SM_LOG_LEVEL_DBG
-	depends on SM_LOG_LEVEL_DBG || SM_GNSS_OUTPUT_NMEA_ON_CMUX_CHANNEL
+	depends on SM_LOG_LEVEL_DBG
 	help
 	  If enabled, NMEA messages that pertain to the satellites will be output
 	  along with the other NMEA messages. Those are output in debug logs, and
@@ -253,6 +325,45 @@ config SM_PGPS_INJECT_FIX_DATA
 	  In that case this option should be disabled.
 
 endif # SM_GNSS
+
+if NRF_MODEM_LIB_TRACE
+
+choice NRF_MODEM_LIB_TRACE_BACKEND
+
+config SM_MODEM_TRACE_BACKEND_CMUX
+	bool "CMUX modem trace backend"
+	depends on SM_CMUX
+	help
+	  When CMUX is enabled, modem traces are transmitted on a dedicated CMUX channel.
+	  The trace channel is the first channel after the AT command channel and the PPP channel.
+
+endchoice # NRF_MODEM_LIB_TRACE_BACKEND
+
+endif
+
+#
+# Hardware RX byte counting for UART
+#
+# Either hardware flow control OR hardware RX byte counting is required to prevent RX data loss.
+# When hw-flow-control is enabled in devicetree, it handles flow management efficiently.
+# When hw-flow-control is disabled, hardware RX byte counting is enabled to prevent data loss,
+# but it consumes more power due to additional timer usage.
+#
+if UART_ASYNC_API
+
+config UART_0_NRF_HW_ASYNC
+	default y if HAS_HW_NRF_UARTE0 && !$(dt_nodelabel_bool_prop,uart0,hw-flow-control)
+
+config UART_0_NRF_HW_ASYNC_TIMER
+	default 0 if HAS_HW_NRF_UARTE0 && !$(dt_nodelabel_bool_prop,uart0,hw-flow-control)
+
+config UART_2_NRF_HW_ASYNC
+	default y if HAS_HW_NRF_UARTE2 && !$(dt_nodelabel_bool_prop,uart2,hw-flow-control)
+
+config UART_2_NRF_HW_ASYNC_TIMER
+	default 2 if HAS_HW_NRF_UARTE2 && !$(dt_nodelabel_bool_prop,uart2,hw-flow-control)
+
+endif # UART_ASYNC_API
 
 module = SM
 module-str = serial modem

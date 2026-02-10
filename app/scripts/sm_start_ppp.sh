@@ -34,9 +34,13 @@ CHATOPT=""
 PPP_DEBUG=""
 PIDFILE="/var/run/nrf91-modem.pid"
 PPP_PIDFILE="/var/run/ppp-nrf91.pid"
+MODEM_TRACE_FILE="/var/log/nrf91-modem-trace.bin"
+TRACE_PID_FILE="/var/run/nrf91-modem-trace.pid"
+TRACE=0
 
 usage() {
-    echo "Usage: $0 [-s serial_port] [-b baud_rate] [-t timeout] [-a APN] [-f IP|IPV6|IPV4V6]"
+    echo "Usage: $0 [-s serial_port] [-b baud_rate] [-t timeout] [-a APN] [-f IP|IPV6|IPV4V6] \
+[-p PDN] [-T] [-v] [-h]"
     echo ""
     echo "  -s serial_port : Serial port where the modem is connected (default: $MODEM)"
     echo "  -b baud_rate   : Baud rate for serial communication (default: $BAUD)"
@@ -44,6 +48,7 @@ usage() {
     echo "  -a APN         : Access Point Name for cellular connection (default: $APN)"
     echo "  -f FAMILY      : PDP_type, one of IP, IPV6, IPV4V6 (default: $TYPE)"
     echo "  -p PDN         : PDN ID to use (default: $PDN), 0 means use default PDN"
+    echo "  -T             : Enable modem trace collection (file: $MODEM_TRACE_FILE)"
     echo "  -v             : Enable verbose output"
     echo "  -h             : Show this help message"
     echo ""
@@ -51,7 +56,7 @@ usage() {
 }
 
 # Parse command line parameters
-while getopts s:b:t:a::f:p:hv flag
+while getopts s:b:t:a::f:p:Thv flag
 do
     case "${flag}" in
 	s) MODEM=${OPTARG};;
@@ -60,6 +65,7 @@ do
 	a) APN=${OPTARG};;
 	p) PDN=${OPTARG};;
 	f) TYPE=${OPTARG};;
+	T) TRACE=1;;
 	v) VERBOSE=1; CHATOPT="-v"; PPP_DEBUG="debug";;
 	h|?) usage;;
     esac
@@ -139,6 +145,21 @@ if [[ ! -c $MODEM ]]; then
 	exit 1
 fi
 
+# Remove stale PID files if processes are not running
+if [ -f "$PIDFILE" ]; then
+	if ! kill -0 $(cat "$PIDFILE" 2>/dev/null) 2>/dev/null; then
+		log_dbg "Removing stale PID file: $PIDFILE"
+		rm -f "$PIDFILE"
+	fi
+fi
+
+if [ -f "$TRACE_PID_FILE" ]; then
+	if ! kill -0 $(cat "$TRACE_PID_FILE" 2>/dev/null) 2>/dev/null; then
+		log_dbg "Removing stale trace PID file: $TRACE_PID_FILE"
+		rm -f "$TRACE_PID_FILE"
+	fi
+fi
+
 if find /dev -type c -name 'gsmtty*' | grep -q . ; then
 	echo "Error: existing CMUX devices found (/dev/gsmtty*)"
 	exit 1
@@ -157,6 +178,7 @@ cmux_close() {
 
 cleanup() {
 	set +eu
+	start-stop-daemon --stop --pidfile $TRACE_PID_FILE --remove-pidfile --oknodo
 	pkill pppd
 	pkill ldattach
 	printf "\xF9\x03\xEF\x05\xC3\x01\xF2\xF9" > $MODEM
@@ -170,7 +192,7 @@ trap cleanup ERR
 stty -F $MODEM $BAUD pass8 raw crtscts clocal
 
 log_dbg "Wait modem to boot"
-if chat -t1 "" "AT" "OK" <$MODEM >$MODEM; then
+if chat -t1 "Ready--" "AT" "OK" <$MODEM >$MODEM; then
 	log_dbg "Modem is in AT mode"
 else
 	log_dbg "Modem not responding, try CMUX Close down..."
@@ -185,17 +207,28 @@ PPP_CMUX=$(ls /dev/gsmtty* | sort -V | head -n 2 | tail -n 1)
 log_dbg "AT CMUX:  $AT_CMUX"
 log_dbg "PPP CMUX: $PPP_CMUX"
 
-sleep 1
+MT_CMUX=""
+if [ $TRACE -gt 0 ]; then
+	MT_CMUX=$(ls /dev/gsmtty* | sort -V | head -n 3 | tail -n 1)
+	log_dbg "Trace CMUX: $MT_CMUX"
+	echo "Trace file: $MODEM_TRACE_FILE"
+	stty -F $MT_CMUX raw clocal -icrnl -ixon -opost
+fi
+sleep 3
+
 stty -F $AT_CMUX clocal
 
 echo "Connect and wait for PPP link..."
 test -c $AT_CMUX
+test $TRACE -gt 0 && start-stop-daemon --start --pidfile $TRACE_PID_FILE --make-pidfile --background --exec /bin/dd -- if=$MT_CMUX of=$MODEM_TRACE_FILE bs=1024
+
 chat $CHATOPT -t$TIMEOUT "${CHAT_SCRIPT[@]}" >$AT_CMUX <$AT_CMUX
 
 shutdown_modem() {
 	set +eu
 	chat $CHATOPT -t5 '' $SHUTDOWN_SCRIPT >$AT_CMUX <$AT_CMUX
 	CHAT_ERR=$?
+	start-stop-daemon --stop --pidfile $TRACE_PID_FILE --remove-pidfile --oknodo
 	pkill ldattach
 	sleep 1
 	if [ "$CHAT_ERR" -ne 0 ]; then
@@ -226,6 +259,7 @@ export SHUTDOWN_SCRIPT
 export PPP_OPTIONS
 export PIDFILE
 export CHATOPT
+export TRACE_PID_FILE
 export -f ppp_start
 export -f shutdown_modem
 export -f cmux_close
@@ -248,4 +282,4 @@ for i in {1..5}; do
 done
 
 echo "Failed to start PPP link"
-exit 1
+cleanup

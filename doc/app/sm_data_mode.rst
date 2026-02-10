@@ -19,12 +19,13 @@ Overview
 ********
 
 You can manually switch between AT-command mode and data mode.
-However, the |SM| data mode is applied automatically while using the following modules:
+However, the |SM| data mode is applied automatically when any of the following AT commands are issued:
 
-* Socket ``send()`` and ``sendto()``
-* MQTT publish
-* GNSS nRF Cloud send message
-* LwM2M carrier library app data send
+* Socket ``AT#XSEND`` and ``AT#XSENDTO``
+* MQTT publish ``AT#XMQTTPUB``
+* nRF Cloud send message ``AT#XNRFCLOUD``
+* DFU write ``AT#XDFUWRITE``
+* LwM2M carrier library app data send ``AT#XCARRIER``
 
 Entering data mode
 ==================
@@ -44,6 +45,7 @@ Other examples:
 
 * ``AT#XMQTTPUB=<topic>,"",<qos>,<retain>``
 * ``AT#XNRFCLOUD=2``
+* ``AT#XDFUWRITE=0,0,4096``
 * ``AT#XCARRIER="app_data_set"``
 
 The |SM| application sends an *OK* response when it successfully enters data mode.
@@ -53,12 +55,8 @@ Sending data in data mode
 
 Any arbitrary data received from the MCU is sent to LTE network *as-is*.
 
-If the current sending function succeeds and :ref:`CONFIG_SM_DATAMODE_URC <CONFIG_SM_DATAMODE_URC>` is defined, the |SM| application reports back the total size as ``#XDATAMODE: <size>``.
-The ``<size>`` value is a positive integer.
-This Unsolicited Result Code (URC) can also be used to impose flow control on uplink sending.
-
 .. note::
-  If the sending operation fails due to a network problem while in data mode, the |SM| application moves to a state where the data received from UART is dropped until the MCU sends the termination command :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>`.
+   If the sending operation fails due to a network problem while in data mode, the |SM| application moves to a state where the data received from UART is dropped until the MCU sends the termination command :ref:`CONFIG_SM_DATAMODE_TERMINATOR <CONFIG_SM_DATAMODE_TERMINATOR>`.
 
 Exiting data mode
 =================
@@ -123,13 +121,6 @@ CONFIG_SM_DATAMODE_TERMINATOR - Pattern string to terminate data mode
    This option specifies a pattern string to terminate data mode.
    The default pattern string is ``+++``.
 
-.. _CONFIG_SM_DATAMODE_URC:
-
-CONFIG_SM_DATAMODE_URC - Send URC in data mode
-   This option reports the result of the previous data-sending operation while the |SM| application remains in data mode.
-   The MCU could use this URC for application-level uplink flow control.
-   It is not selected by default.
-
 .. _CONFIG_SM_DATAMODE_BUF_SIZE:
 
 CONFIG_SM_DATAMODE_BUF_SIZE - Buffer size for data mode
@@ -142,6 +133,7 @@ Data mode AT commands
 The following command list describes data mode-related AT commands.
 
 .. _sm_data_mode_ctrl:
+.. _sm_data_mode_at_cmd_start:
 
 Data mode control #XDATACTRL
 ============================
@@ -161,7 +153,7 @@ Syntax
 
 ::
 
-   #XDATACTRL=<time_limit>
+   AT#XDATACTRL=<time_limit>
 
 * The ``<time_limit>`` parameter sets the timeout value in milliseconds.
   The default value is the minimum required value, based on the configured UART baud rate.
@@ -177,7 +169,7 @@ Syntax
 
 ::
 
-   #XDATACTRL?
+   AT#XDATACTRL?
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -196,7 +188,7 @@ Syntax
 
 ::
 
-   #XDATACTRL=?
+   AT#XDATACTRL=?
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -217,8 +209,11 @@ Unsolicited notification
 
    #XDATAMODE: <status>
 
-* The ``<status>`` value is an integer that indicates the status of the data mode operation.
-  It is ``0`` for success or ``-1`` for failure.
+* The ``<status>`` parameter is an integer that indicates the status of the data mode operation.
+  It can have one of the following values:
+
+  * ``0`` - Success
+  * ``-1`` - Failure
 
 Example
 ~~~~~~~
@@ -231,3 +226,5 @@ Example
    Test datamode
    +++
    #XDATAMODE: 0
+
+.. _sm_data_mode_at_cmd_end:

@@ -51,6 +51,11 @@ Syntax
   It represents the Packet Data Network (PDN) ID that can be used instead of the default PDN for downloading.
   It can be provided to the start operations.
 
+  .. note::
+
+     Raw sockets must not use the PDN connection at the same time.
+     See :ref:`SM_AT_SOCKET_RAW_SOCKET_LIMITATION` for more information.
+
 .. note::
 
    During a delta update to the modem, the modem DFU area is automatically erased as needed as part of the update process. Erasing this area manually is optional.
@@ -74,7 +79,7 @@ Response syntax
 
 * The ``<size>`` integer gives the size of the modem DFU area in bytes.
 * The ``<offset>`` integer gives the offset of the firmware image in the modem DFU area.
-  It is ``0`` if no image is in the modem DFU area, and ``2621440`` (:c:macro:`NRF_MODEM_DELTA_DFU_OFFSET_DIRTY`) if the modem DFU area needs to be erased before a new firmware update can be received.
+  It is ``0`` if no image is in the modem DFU area, and ``2621440`` (``NRF_MODEM_DELTA_DFU_OFFSET_DIRTY``) if the modem DFU area needs to be erased before a new firmware update can be received.
 
 Example
 ~~~~~~~
@@ -124,7 +129,7 @@ Unsolicited notification
 
    #XFOTA: <fota_stage>,<fota_status>[,<fota_info>]
 
-* The ``<fota_stage>`` value is an integer and can return one of the following values:
+* The ``<fota_stage>`` parameter is an integer and can return one of the following values:
 
   * ``0`` - Init
   * ``1`` - Download
@@ -133,28 +138,28 @@ Unsolicited notification
   * ``4`` - Downloaded, to be activated
   * ``5`` - Complete
 
-* The ``<fota_status>`` value is an integer and can return one of the following values:
+* The ``<fota_status>`` parameter is an integer and can return one of the following values:
 
   * ``0`` - OK
   * ``1`` - Error
   * ``2`` - Cancelled
   * ``3`` - Reverted (application FOTA only)
 
-* The ``<fota_info>`` value is an integer.
+* The ``<fota_info>`` parameter is an integer.
   Its value can have different meanings based on the values returned by ``<fota_stage>`` and ``<fota_status>``.
   See the following table:
 
-  +-------------------------+----------------------------+-------------------------------------------------------------------------------+
-  |``<fota_stage>`` value   |``<fota_status>`` value     | ``<fota_info>`` value                                                         |
-  +=========================+============================+===============================================================================+
-  |``1`` (namely *Download*)| ``0`` (namely *OK*)        | Percentage of the download                                                    |
-  +-------------------------+----------------------------+-------------------------------------------------------------------------------+
-  |``1`` (namely *Download*)| ``1`` (namely *ERROR*)     | Error Code                                                                    |
-  +-------------------------+----------------------------+-------------------------------------------------------------------------------+
-  |``1`` (namely *Download*)| ``2`` (namely *CANCELLED*) | ``0`` - Downloading is cancelled before completion                            |
-  +-------------------------+----------------------------+-------------------------------------------------------------------------------+
-  |``5`` (namely *Complete*)| ``1`` (namely *ERROR*)     | Error Code                                                                    |
-  +-------------------------+------------------------+---+-------------------------------------------------------------------------------+
+  +-------------------------+----------------------------+----------------------------------------------------+
+  |``<fota_stage>``         |``<fota_status>``           | ``<fota_info>``                                    |
+  +=========================+============================+====================================================+
+  |``1`` (namely *Download*)| ``0`` (namely *OK*)        | Percentage of the download                         |
+  +-------------------------+----------------------------+----------------------------------------------------+
+  |``1`` (namely *Download*)| ``1`` (namely *ERROR*)     | Error Code                                         |
+  +-------------------------+----------------------------+----------------------------------------------------+
+  |``1`` (namely *Download*)| ``2`` (namely *CANCELLED*) | ``0`` - Downloading is cancelled before completion |
+  +-------------------------+----------------------------+----------------------------------------------------+
+  |``5`` (namely *Complete*)| ``1`` (namely *ERROR*)     | Error Code                                         |
+  +-------------------------+------------------------+---+----------------------------------------------------+
 
   The error codes can be the following:
 
@@ -164,11 +169,11 @@ Unsolicited notification
 
   For modem FOTA, the error codes can be the following:
 
-  * ``71303169`` (:c:macro:`NRF_MODEM_DFU_RESULT_INTERNAL_ERROR`) - The modem encountered a fatal internal error during firmware update.
-  * ``71303170`` (:c:macro:`NRF_MODEM_DFU_RESULT_HARDWARE_ERROR`) - The modem encountered a fatal hardware error during firmware update.
-  * ``71303171`` (:c:macro:`NRF_MODEM_DFU_RESULT_AUTH_ERROR`) - Modem firmware update failed due to an authentication error.
-  * ``71303172`` (:c:macro:`NRF_MODEM_DFU_RESULT_UUID_ERROR`) - Modem firmware update failed due to UUID mismatch.
-  * ``71303173`` (:c:macro:`NRF_MODEM_DFU_RESULT_VOLTAGE_LOW`) - Modem firmware update not executed due to low voltage. The modem will retry the update on reboot.
+  * ``71303169`` (``NRF_MODEM_DFU_RESULT_INTERNAL_ERROR``) - The modem encountered a fatal internal error during firmware update.
+  * ``71303170`` (``NRF_MODEM_DFU_RESULT_HARDWARE_ERROR``) - The modem encountered a fatal hardware error during firmware update.
+  * ``71303171`` (``NRF_MODEM_DFU_RESULT_AUTH_ERROR``) - Modem firmware update failed due to an authentication error.
+  * ``71303172`` (``NRF_MODEM_DFU_RESULT_UUID_ERROR``) - Modem firmware update failed due to UUID mismatch.
+  * ``71303173`` (``NRF_MODEM_DFU_RESULT_VOLTAGE_LOW``) - Modem firmware update not executed due to low voltage. The modem will retry the update on reboot.
 
 Read command
 ------------
@@ -185,7 +190,7 @@ Syntax
 
 ::
 
-   #XFOTA=?
+   AT#XFOTA=?
 
 Response syntax
 ~~~~~~~~~~~~~~~

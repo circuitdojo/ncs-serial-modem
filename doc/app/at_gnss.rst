@@ -35,7 +35,7 @@ Syntax
 
 ::
 
-   #XGNSS=<op>,<cloud_assistance>,<interval>[,<timeout>]
+   AT#XGNSS=<op>,<cloud_assistance>,<interval>[,<timeout>]
 
 * The ``<op>`` parameter can have the following integer values:
 
@@ -106,13 +106,13 @@ Unsolicited notification
 
    #XGNSS: <latitude>,<longitude>,<altitude>,<accuracy>,<speed>,<heading>,<datetime>
 
-* The ``<latitude>`` value represents the latitude in degrees.
-* The ``<longitude>`` value represents the longitude in degrees.
-* The ``<altitude>`` value represents the altitude above the WGS-84 ellipsoid in meters.
-* The ``<accuracy>`` value represents the accuracy (2D 1-sigma) in meters.
-* The ``<speed>`` value represents the horizontal speed in meters per second.
-* The ``<heading>`` value represents the heading of the movement of the user in degrees.
-* The ``<datetime>`` value represents the UTC date-time.
+* The ``<latitude>`` parameter represents the latitude in degrees.
+* The ``<longitude>`` parameter represents the longitude in degrees.
+* The ``<altitude>`` parameter represents the altitude above the WGS-84 ellipsoid in meters.
+* The ``<accuracy>`` parameter represents the accuracy (2D 1-sigma) in meters.
+* The ``<speed>`` parameter represents the horizontal speed in meters per second.
+* The ``<heading>`` parameter represents the heading of the movement of the user in degrees.
+* The ``<datetime>`` parameter represents the UTC date-time.
 
 .. sm_gps_status_notif_start
 
@@ -258,7 +258,7 @@ Syntax
 
 ::
 
-   #XGNSS?
+   AT#XGNSS?
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -288,7 +288,7 @@ Syntax
 
 ::
 
-   #XGNSS=?
+   AT#XGNSS=?
 
 Example
 ~~~~~~~
@@ -322,7 +322,7 @@ Syntax
 
 ::
 
-   #XGNSSDEL=<mask>
+   AT#XGNSSDEL=<mask>
 
 The ``<mask>`` parameter accepts an integer that is a bitwise ``OR`` of the following bitmasks:
 
@@ -367,7 +367,7 @@ Syntax
 
 ::
 
-   #XGNSSDEL=?
+   AT#XGNSSDEL=?
 
 Example
 ~~~~~~~

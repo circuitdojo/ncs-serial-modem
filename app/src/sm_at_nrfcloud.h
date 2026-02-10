@@ -12,8 +12,6 @@
  * @brief Vendor-specific AT command for nRF Cloud service.
  * @{
  */
-#if defined(CONFIG_SM_NRF_CLOUD)
-
 #include <stdbool.h>
 
 /* Whether the connection to nRF Cloud is ready. */
@@ -22,22 +20,5 @@ extern bool sm_nrf_cloud_ready;
 /* Whether to send the device's location to nRF Cloud. */
 extern bool sm_nrf_cloud_send_location;
 
-/**
- * @brief Initialize nRF Cloud AT command parser.
- *
- * @retval 0 If the operation was successful.
- *           Otherwise, a (negative) error code is returned.
- */
-int sm_at_nrfcloud_init(void);
-
-/**
- * @brief Uninitialize nRF Cloud AT command parser.
- *
- * @retval 0 If the operation was successful.
- *           Otherwise, a (negative) error code is returned.
- */
-int sm_at_nrfcloud_uninit(void);
-
-#endif /* CONFIG_SM_NRF_CLOUD */
 /** @} */
 #endif /* SM_AT_NRFCLOUD_ */

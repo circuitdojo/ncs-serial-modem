@@ -14,6 +14,7 @@
 #include <net/nrf_cloud_pgps.h>
 #include <net/nrf_cloud_location.h>
 #include <modem/at_parser.h>
+#include <modem/nrf_modem_lib.h>
 #include "sm_util.h"
 #include "sm_at_host.h"
 #include "sm_at_nrfcloud.h"
@@ -54,15 +55,14 @@ static struct k_work nrfcloud_loc_req;
  * [,<n_earfcn>2, <n_phys_cell_id>2, <n_rsrp>2, <n_rsrq>2,<time_diff>2] ...
  * [,<n_earfcn>17, <n_phys_cell_id>17, <n_rsrp>17, <n_rsrq>17,<time_diff>17
  *
- * Max 17 ncell, but align with CONFIG_SM_AT_MAX_PARAM
+ * Max 17 ncell
  * 11 number of parameters for current cell (including "%NCELLMEAS")
  * 5  number of parameters for one neighboring cell
  */
 #define MAX_PARAM_CELL   11
 #define MAX_PARAM_NCELL  5
-/* Must support at least all params for current cell plus one ncell */
-#define NCELL_CNT ((CONFIG_SM_AT_MAX_PARAM - MAX_PARAM_CELL) / MAX_PARAM_NCELL)
-BUILD_ASSERT(NCELL_CNT > 0, "CONFIG_SM_AT_MAX_PARAM too small");
+/* Neighbor cells are not very useful for positioning so we don't need to support 10 or 17 */
+#define NCELL_CNT 5
 
 /* Neighboring cell measurements. */
 static struct lte_lc_ncell nrfcloud_ncells[NCELL_CNT];
@@ -75,8 +75,6 @@ static struct lte_lc_cells_info nrfcloud_cell_data = {
 static bool nrfcloud_ncellmeas_done;
 
 #define WIFI_APS_BEGIN_IDX 3
-BUILD_ASSERT(WIFI_APS_BEGIN_IDX + NRF_CLOUD_LOCATION_WIFI_AP_CNT_MIN
-	< CONFIG_SM_AT_MAX_PARAM, "CONFIG_SM_AT_MAX_PARAM too small");
 
 /* nRF Cloud location request Wi-Fi data. */
 static struct wifi_scan_info nrfcloud_wifi_data;
@@ -200,6 +198,12 @@ static void ncell_meas_mon(const char *notify)
 	ncells_count = (param_count - MAX_PARAM_CELL) / MAX_PARAM_NCELL;
 	for (unsigned int i = 0; i != ncells_count; ++i) {
 		const unsigned int offset = MAX_PARAM_CELL + i * MAX_PARAM_NCELL;
+
+		if (i >= NCELL_CNT) {
+			LOG_INF("Too many neighboring cells (%d) for allocated buffer (%d)",
+				i, NCELL_CNT);
+			break;
+		}
 
 		/* parse n_earfcn */
 		err = at_parser_num_get(&parser, offset, &nrfcloud_ncells[i].earfcn);
@@ -754,17 +758,23 @@ static int handle_at_nrf_cloud_pos(enum at_parser_cmd_type cmd_type,
 
 #endif /* CONFIG_NRF_CLOUD_LOCATION */
 
-int sm_at_nrfcloud_init(void)
+static void sm_at_nrfcloud_init(int ret, void *ctx)
 {
-	int err = 0;
+	static bool initialized;
+	int err;
 	struct nrf_cloud_init_param init_param = {
 		.event_handler = cloud_event_handler
 	};
 
+	if (initialized) {
+		return;
+	}
+	initialized = true;
+
 	err = nrf_cloud_init(&init_param);
 	if (err && err != -EACCES) {
 		LOG_ERR("Cloud could not be initialized, error: %d", err);
-		return err;
+		return;
 	}
 
 	k_work_init(&cloud_cmd, cloud_cmd_wk);
@@ -772,17 +782,7 @@ int sm_at_nrfcloud_init(void)
 	k_work_init(&nrfcloud_loc_req, loc_req_wk);
 #endif
 	nrf_cloud_client_id_get(nrfcloud_device_id, sizeof(nrfcloud_device_id));
-
-	return err;
 }
+NRF_MODEM_LIB_ON_INIT(sm_nrfcloud_init_hook, sm_at_nrfcloud_init, NULL);
 
-int sm_at_nrfcloud_uninit(void)
-{
-	if (sm_nrf_cloud_ready) {
-		(void)nrf_cloud_disconnect();
-	}
-	(void)nrf_cloud_uninit();
-
-	return 0;
-}
 #endif /* CONFIG_SM_NRF_CLOUD */

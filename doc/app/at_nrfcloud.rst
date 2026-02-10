@@ -27,12 +27,18 @@ Set command
 
 The set command allows you to access the nRF Cloud service.
 
+.. note::
+
+   The ``#XNRFCLOUD`` command uses default PDN connection with ID ``0``.
+   Raw sockets must not use the PDN connection at the same time.
+   See :ref:`SM_AT_SOCKET_RAW_SOCKET_LIMITATION` for more information.
+
 Syntax
 ~~~~~~
 
 ::
 
-   #XNRFCLOUD=<op>[,<send_location>]
+   AT#XNRFCLOUD=<op>[,<send_location>]
 
 The ``<op>`` parameter can have the following integer values:
 
@@ -40,7 +46,7 @@ The ``<op>`` parameter can have the following integer values:
 * ``1`` - Connect to the nRF Cloud service.
 * ``2`` - Send a message in the JSON format to the nRF Cloud service.
 
-When ``<op>`` is ``2``, |SM| enters ``sm_data_mode``.
+When ``<op>`` is ``2``, |SM| enters :ref:`sm_data_mode`.
 
 The ``<send_location>`` parameter is used only when the value of ``<op>`` is ``1``.
 It can have the following integer values:
@@ -81,14 +87,14 @@ Unsolicited notification
 
    #XNRFCLOUD: <ready>,<send_location>
 
-* The ``<ready>`` value indicates whether the connection to nRF Cloud is established or not.
-* The ``<send_location>`` value indicates whether the device location will be sent to nRF Cloud or not.
+* The ``<ready>`` parameter indicates whether the connection to nRF Cloud is established or not.
+* The ``<send_location>`` parameter indicates whether the device location will be sent to nRF Cloud or not.
 
 ::
 
    #XNRFCLOUD: <message>
 
-* The ``<message>`` value indicates data received from nRF Cloud that is not a supported cloud2device appId.
+* The ``<message>`` parameter indicates data received from nRF Cloud that is not a supported cloud2device appId.
 
 Example
 ~~~~~~~
@@ -132,7 +138,7 @@ Syntax
 
 ::
 
-   #XNRFCLOUD?
+   AT#XNRFCLOUD?
 
 Response syntax
 ~~~~~~~~~~~~~~~
@@ -141,10 +147,10 @@ Response syntax
 
    #XNRFCLOUD: <ready>,<send_location>,<sec_tag>,<device_id>
 
-* The ``<ready>`` value indicates whether the connection to nRF Cloud is established or not.
-* The ``<send_location>`` value indicates whether the device location will be sent to nRF Cloud or not.
-* The ``<sec_tag>`` value indicates the ``sec_tag`` used for accessing nRF Cloud.
-* The ``<device_id>`` value indicates the device ID used for accessing nRF Cloud.
+* The ``<ready>`` parameter indicates whether the connection to nRF Cloud is established or not.
+* The ``<send_location>`` parameter indicates whether the device location will be sent to nRF Cloud or not.
+* The ``<sec_tag>`` parameter indicates the ``sec_tag`` used for accessing nRF Cloud.
+* The ``<device_id>`` parameter indicates the device ID used for accessing nRF Cloud.
 
 Example
 ~~~~~~~
@@ -167,7 +173,7 @@ Syntax
 
 ::
 
-   #XNRFCLOUD=?
+   AT#XNRFCLOUD=?
 
 Example
 ~~~~~~~
@@ -204,7 +210,7 @@ Syntax
 
 ::
 
-   #XNRFCLOUDPOS=<cell_pos>,<wifi_pos>[,<MAC 1>[,<RSSI 1>],<MAC 2>[,<RSSI 2>][,<MAC 3>[...]]]
+   AT#XNRFCLOUDPOS=<cell_pos>,<wifi_pos>[,<MAC 1>[,<RSSI 1>],<MAC 2>[,<RSSI 2>][,<MAC 3>[...]]]
 
 The ``<cell_pos>`` parameter can have the following integer values:
 
@@ -222,10 +228,10 @@ The ``<wifi_pos>`` parameter can have the following integer values:
 * ``0`` - Do not include Wi-Fi access point information in the location request.
 * ``1`` - Use Wi-Fi access point information.
   The access points must be given as additional parameters to the command.
-  The minimum number of access points to provide is two (:c:macro:`NRF_CLOUD_LOCATION_WIFI_AP_CNT_MIN`), and the maximum is limited by the AT command parameter count limit (:ref:`CONFIG_SM_AT_MAX_PARAM <CONFIG_SM_AT_MAX_PARAM>`).
+  The minimum number of access points to provide is two (``NRF_CLOUD_LOCATION_WIFI_AP_CNT_MIN``), and the maximum is limited by the AT command buffer size (:ref:`CONFIG_SM_AT_BUF_SIZE <CONFIG_SM_AT_BUF_SIZE>`).
 
 The ``<MAC x>`` parameter is a string.
-It indicates the MAC address of a Wi-Fi access point and must be formatted as ``%02x:%02x:%02x:%02x:%02x:%02x`` (:c:macro:`WIFI_MAC_ADDR_TEMPLATE`).
+It indicates the MAC address of a Wi-Fi access point and must be formatted as ``%02x:%02x:%02x:%02x:%02x:%02x`` (``WIFI_MAC_ADDR_TEMPLATE``).
 
 The ``<RSSI x>`` parameter is an optional integer.
 It indicates the signal strength of a Wi-Fi access point in dBm, between ``-128`` and ``0``.
@@ -242,7 +248,7 @@ Unsolicited notification
 This is emitted when the location request failed, either when sending it or receiving its response.
 No notification containing location data will be emitted.
 
-* The ``<error>`` value indicates the error that happened.
+* The ``<error>`` parameter indicates the error that happened.
   It is one of the :c:enum:`nrf_cloud_error` values.
 
 ::
@@ -251,15 +257,15 @@ No notification containing location data will be emitted.
 
 This is emitted when a successful response to a sent location request is received.
 
-* The ``<type>`` value indicates the service used to fulfill the location request.
+* The ``<type>`` parameter indicates the service used to fulfill the location request.
 
   * ``0`` (:c:enumerator:`LOCATION_TYPE_SINGLE_CELL`) - Single-cell cellular location.
   * ``1`` (:c:enumerator:`LOCATION_TYPE_MULTI_CELL`) - Multi-cell cellular location.
   * ``2`` (:c:enumerator:`LOCATION_TYPE_WIFI`) - Wi-Fi location.
 
-* The ``<latitude>`` value represents the latitude in degrees.
-* The ``<longitude>`` value represents the longitude in degrees.
-* The ``<uncertainty>`` value represents the radius of the uncertainty circle around the location in meters, also known as Horizontal Positioning Error (HPE).
+* The ``<latitude>`` parameter represents the latitude in degrees.
+* The ``<longitude>`` parameter represents the longitude in degrees.
+* The ``<uncertainty>`` parameter represents the radius of the uncertainty circle around the location in meters, also known as Horizontal Positioning Error (HPE).
 
 Example
 ~~~~~~~

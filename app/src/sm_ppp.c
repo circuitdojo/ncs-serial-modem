@@ -7,15 +7,12 @@
 #include "sm_ppp.h"
 #include "sm_at_host.h"
 #include "sm_util.h"
+#include "sm_defines.h"
 #include "sm_ctrl_pin.h"
-#if defined(CONFIG_SM_CMUX)
 #include "sm_cmux.h"
-#endif
+#include "sm_uart_handler.h"
 #include <modem/lte_lc.h>
 #include <zephyr/modem/ppp.h>
-#if !defined(CONFIG_SM_CMUX)
-#include <zephyr/modem/backend/uart.h>
-#endif
 #include <zephyr/net/ethernet.h>
 #include <zephyr/net/net_if.h>
 #include <zephyr/net/ppp.h>
@@ -24,6 +21,7 @@
 #include <zephyr/random/random.h>
 #include <zephyr/pm/device.h>
 #include <assert.h>
+#include <strings.h>
 
 LOG_MODULE_REGISTER(sm_ppp, CONFIG_SM_LOG_LEVEL);
 
@@ -33,14 +31,8 @@ LOG_MODULE_REGISTER(sm_ppp, CONFIG_SM_LOG_LEVEL);
  */
 bool sm_fwd_cgev_notifs;
 
-#if defined(CONFIG_SM_CMUX)
-BUILD_ASSERT(!DT_NODE_EXISTS(DT_CHOSEN(ncs_sm_ppp_uart)),
-	"When CMUX is enabled PPP is usable only through it so it cannot have its own UART.");
-#else
-static const struct device *ppp_uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_sm_ppp_uart));
-#endif
 static struct net_if *ppp_iface;
-
+static bool sm_ppp_auto_start;
 static uint8_t ppp_data_buf[1500];
 static struct sockaddr_ll ppp_zephyr_dst_addr;
 
@@ -115,6 +107,11 @@ static const char *ppp_action_str(enum ppp_action action)
 	}
 
 	return "";
+}
+
+void sm_ppp_set_auto_start(bool enable)
+{
+	sm_ppp_auto_start = enable;
 }
 
 static bool open_ppp_sockets(void)
@@ -249,7 +246,7 @@ static bool ppp_is_running(void)
 
 static void send_status_notification(void)
 {
-	rsp_send("\r\n#XPPP: %u,%u,%u\r\n", ppp_is_running(), ppp_peer_connected, ppp_pdn_cid);
+	rsp_send("\r\n#XPPP: %u,%u,%u\r\n", !sm_ppp_is_stopped(), ppp_peer_connected, ppp_pdn_cid);
 }
 
 static void ppp_start_failure(void)
@@ -312,17 +309,26 @@ static void ppp_retrieve_pdn_info(struct ppp_context *const ctx)
 	LOG_DBG("MTU set to %u.", mtu);
 }
 
+static int drop_at_write(const uint8_t *data, size_t len, bool urc)
+{
+	ARG_UNUSED(urc);
+	LOG_DBG("Drop AT: '%.*s'", len, data);
+
+	/* Drop all data */
+	return len;
+}
+
 static int ppp_start(void)
 {
+	int ret;
+
 	if (ppp_state == PPP_STATE_RUNNING) {
 		LOG_INF("PPP already running");
 		send_status_notification();
 		return 0;
 	}
 	at_monitor_resume(&sm_ppp_on_cgev);
-	ppp_state = PPP_STATE_STARTING;
 
-	int ret;
 	struct ppp_context *const ctx = net_if_l2_data(ppp_iface);
 
 	if (!configure_ppp_link_ip_addresses(ctx)) {
@@ -330,6 +336,7 @@ static int ppp_start(void)
 		goto error;
 	}
 
+	ppp_state = PPP_STATE_STARTING;
 	ppp_retrieve_pdn_info(ctx);
 
 	ret = net_if_up(ppp_iface);
@@ -344,32 +351,45 @@ static int ppp_start(void)
 		goto error;
 	}
 
-#if defined(CONFIG_SM_CMUX)
-	ppp_pipe = sm_cmux_reserve(CMUX_PPP_CHANNEL);
-	/* The pipe opening is managed by CMUX. */
-#endif
+	send_status_notification();
 
-	modem_ppp_attach(&ppp_module, ppp_pipe);
+	if (sm_cmux_is_started()) {
+		ppp_pipe = sm_cmux_reserve(CMUX_PPP_CHANNEL);
+		modem_ppp_attach(&ppp_module, ppp_pipe);
+		/* The pipe opening is managed by CMUX. */
+	} else {
+		/* Wait for TX buffer to drain */
+		k_sleep(K_MSEC(10));
+		ppp_pipe = sm_uart_pipe_init(&drop_at_write);
+		if (!ppp_pipe) {
+			ret = -ENOSYS;
+			goto error;
+		}
 
-#if !defined(CONFIG_SM_CMUX)
-	ret = modem_pipe_open(ppp_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
-	if (ret) {
-		LOG_ERR("Failed to open PPP pipe (%d).", ret);
-		ppp_start_failure();
-		goto error;
+		modem_ppp_attach(&ppp_module, ppp_pipe);
+		ret = modem_pipe_open(ppp_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
+		if (ret) {
+			LOG_ERR("Failed to open PPP pipe (%d).", ret);
+			ppp_start_failure();
+			goto error;
+		}
 	}
-#endif
 
 	net_if_carrier_on(ppp_iface);
 
 	ppp_state = PPP_STATE_RUNNING;
-	send_status_notification();
 
 	return 0;
 
 error:
 	ppp_state = PPP_STATE_STOPPED;
 
+	if (!sm_cmux_is_started() && ppp_pipe) {
+		modem_pipe_close(ppp_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
+		modem_ppp_release(&ppp_module);
+		sm_uart_handler_enable();
+	}
+	ppp_pipe = NULL;
 	return ret;
 }
 
@@ -386,39 +406,43 @@ static int ppp_stop(enum ppp_reason reason)
 	}
 	ppp_state = PPP_STATE_STOPPING;
 
-	switch (reason) {
-	case PPP_REASON_PEER_DISCONNECTED:
-	case PPP_REASON_CMD:
+	/* When CMUX is used, PPP connection may recover on the same pipe,
+	 * on other cases, it will be closed and pipe is returned to AT mode.
+	 */
+	if (reason == PPP_REASON_PEER_DISCONNECTED || reason == PPP_REASON_CMD ||
+	    !sm_cmux_is_started()) {
 		at_monitor_pause(&sm_ppp_on_cgev);
-		break;
-	default:
-		break;
 	}
 
 	/* Bring the interface down before releasing pipes and carrier.
 	 * This is needed for LCP to notify the remote endpoint that the link is going down.
 	 */
-	const int ret = net_if_down(ppp_iface);
+	int ret = net_if_down(ppp_iface);
 
 	if (ret) {
 		LOG_WRN("Failed to bring PPP interface down (%d).", ret);
 	}
 
-#if !defined(CONFIG_SM_CMUX)
-	modem_pipe_close(ppp_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
-#endif
-
 	modem_ppp_release(&ppp_module);
 
-#if defined(CONFIG_SM_CMUX)
-	sm_cmux_release(CMUX_PPP_CHANNEL);
-#endif
+	if (sm_cmux_is_started()) {
+		sm_cmux_release(CMUX_PPP_CHANNEL);
+	} else {
+		modem_pipe_close(ppp_pipe, K_SECONDS(CONFIG_SM_MODEM_PIPE_TIMEOUT));
+		ret = sm_uart_handler_enable();
+
+		if (ret) {
+			LOG_ERR("Failed to enable PPP UART handler (%d).", ret);
+		}
+		LOG_INF("Returned to AT command mode.");
+	}
 
 	net_if_carrier_off(ppp_iface);
 
 	close_ppp_sockets();
 
 	ppp_state = PPP_STATE_STOPPED;
+	ppp_pipe = NULL;
 	send_status_notification();
 
 	return 0;
@@ -433,13 +457,13 @@ AT_CMD_CUSTOM(at_cgerep_interceptor, "AT+CGEREP", at_cgerep_callback);
 static int at_cgerep_callback(char *buf, size_t len, char *at_cmd)
 {
 	int ret;
-	unsigned int subscribe;
-	const bool set_cmd = (sscanf(at_cmd, "AT+CGEREP=%u", &subscribe) == 1);
+	unsigned int subscribe = 0;
+	const bool set_cmd = (sscanf(at_cmd, "%*[^=]=%u", &subscribe) == 1);
 
 	/* The modem interprets AT+CGEREP and AT+CGEREP= as AT+CGEREP=0.
 	 * Prevent those forms, only allowing AT+CGEREP=0, for simplicty.
 	 */
-	if (!set_cmd && (!strcmp(at_cmd, "AT+CGEREP") || !strcmp(at_cmd, "AT+CGEREP="))) {
+	if (!set_cmd && (!strcasecmp(at_cmd, "AT+CGEREP") || !strcasecmp(at_cmd, "AT+CGEREP="))) {
 		LOG_ERR("The syntax %s is disallowed. Use AT+CGEREP=0 instead.", at_cmd);
 		return -EINVAL;
 	}
@@ -489,6 +513,11 @@ static void at_notif_on_cgev(const char *notify)
 	uint8_t cid;
 	char cgev_pdn_act[] = "+CGEV: ME PDN ACT";
 
+	if (!sm_ppp_auto_start) {
+		/* Auto-start disabled, ignore all notifications */
+		return;
+	}
+
 	/* +2 for space and a number */
 	if (strlen(cgev_pdn_act) + 2 > strlen(notify)) {
 		/* Ignore notifications that are not long enough to be what we are interested in */
@@ -521,19 +550,22 @@ AT_CMD_CUSTOM(at_cfun_set_interceptor, "AT+CFUN=", at_cfun_set_callback);
 static int at_cfun_set_callback(char *buf, size_t len, char *at_cmd)
 {
 	unsigned int mode;
-	const int ret = sm_util_at_cmd_no_intercept(buf, len, at_cmd);
+	int ret;
 
 	/* sscanf() doesn't match if this is a test command (it also gets intercepted). */
-	if (ret || sscanf(at_cmd, "AT+CFUN=%u", &mode) != 1) {
-		/* The functional mode cannot have changed. */
-		return ret;
+	if (sscanf(at_cmd, "%*[^=]=%u", &mode) == 1) {
+		if (mode == LTE_LC_FUNC_MODE_NORMAL || mode == LTE_LC_FUNC_MODE_ACTIVATE_LTE) {
+			subscribe_cgev_notifications();
+		} else if (mode == LTE_LC_FUNC_MODE_POWER_OFF) {
+			/* Unsubscribe the user as would normally happen. */
+			sm_fwd_cgev_notifs = false;
+		}
 	}
 
-	if (mode == LTE_LC_FUNC_MODE_NORMAL || mode == LTE_LC_FUNC_MODE_ACTIVATE_LTE) {
-		subscribe_cgev_notifications();
-	} else if (mode == LTE_LC_FUNC_MODE_POWER_OFF) {
-		/* Unsubscribe the user as would normally happen. */
-		sm_fwd_cgev_notifs = false;
+	/* Forward AT+CFUN command to the modem. */
+	ret = sm_util_at_cmd_no_intercept(buf, len, at_cmd);
+	if (ret) {
+		return ret;
 	}
 	return 0;
 }
@@ -607,31 +639,6 @@ NET_MGMT_REGISTER_EVENT_HANDLER(sm_ppp_event_handler,
 
 static int sm_ppp_init(void)
 {
-#if !defined(CONFIG_SM_CMUX)
-	if (!device_is_ready(ppp_uart_dev)) {
-		return -EAGAIN;
-	}
-
-	{
-		static struct modem_backend_uart ppp_uart_backend;
-		static uint8_t ppp_uart_backend_receive_buf[sizeof(ppp_data_buf)]
-			__aligned(sizeof(void *));
-		static uint8_t ppp_uart_backend_transmit_buf[sizeof(ppp_data_buf)];
-
-		const struct modem_backend_uart_config uart_backend_config = {
-			.uart = ppp_uart_dev,
-			.receive_buf = ppp_uart_backend_receive_buf,
-			.receive_buf_size = sizeof(ppp_uart_backend_receive_buf),
-			.transmit_buf = ppp_uart_backend_transmit_buf,
-			.transmit_buf_size = sizeof(ppp_uart_backend_transmit_buf),
-		};
-
-		ppp_pipe = modem_backend_uart_init(&ppp_uart_backend, &uart_backend_config);
-		if (!ppp_pipe) {
-			return -ENOSYS;
-		}
-	}
-#endif
 	/* Initialize event message queue */
 	k_msgq_init(&ppp_work.queue, (char *)&ppp_work.queue_buf, sizeof(struct ppp_event),
 		    sizeof(ppp_work.queue_buf) / sizeof(struct ppp_event));
@@ -640,6 +647,7 @@ static int sm_ppp_init(void)
 	ppp_fds[EVENT_FD_IDX] = eventfd(0, EFD_NONBLOCK);
 	if (ppp_fds[EVENT_FD_IDX] < 0) {
 		LOG_ERR("Failed to create event eventfd (%d).", errno);
+		sm_init_failed = true;
 		return -errno;
 	}
 
@@ -693,11 +701,13 @@ static int handle_at_ppp(enum at_parser_cmd_type cmd_type, struct at_parser *par
 	/* Send "OK" first in case stopping PPP results in the CMUX AT channel switching. */
 	rsp_send_ok();
 	if (op == OP_START) {
+		sm_ppp_set_auto_start(true);
 		ppp_pdn_cid = 0;
 		/* Store PPP PDN if given */
 		at_parser_num_get(parser, 2, &ppp_pdn_cid);
 		delegate_ppp_event(PPP_START, PPP_REASON_CMD);
 	} else {
+		sm_ppp_set_auto_start(false);
 		delegate_ppp_event(PPP_STOP, PPP_REASON_CMD);
 	}
 	return -SILENT_AT_COMMAND_RET;

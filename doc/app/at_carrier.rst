@@ -26,7 +26,7 @@ Syntax
 
    #XCARRIEREVT: <evt_type>,<param1>[,<param2>[,<param3>]..]
 
-The ``<evt_type>`` value is an integer indicating the type of the event, followed by a variable number of parameters depending on the event type.
+The ``<evt_type>`` parameter is an integer indicating the type of the event, followed by a variable number of parameters depending on the event type.
 These may be the following:
 
 * ``#XCARRIEREVT: 1,<status>``
@@ -71,16 +71,16 @@ These may be the following:
 
   ``<reason>`` indicates the reason for the connection deferral and can return the following values:
 
-  * ``0`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_NO_REASON`.
-  * ``1`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_PDN_ACTIVATE`.
-  * ``2`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_BOOTSTRAP_NO_ROUTE`.
-  * ``3`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_BOOTSTRAP_CONNECT`.
-  * ``4`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_BOOTSTRAP_SEQUENCE`.
-  * ``5`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_SERVER_NO_ROUTE`.
-  * ``6`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_SERVER_CONNECT`.
-  * ``7`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_SERVER_REGISTRATION`.
-  * ``8`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_SERVICE_UNAVAILABLE`.
-  * ``9`` - - :c:macro:`LWM2M_CARRIER_DEFERRED_SIM_MSISDN`.
+  * ``0`` - ``LWM2M_CARRIER_DEFERRED_NO_REASON``
+  * ``1`` - ``LWM2M_CARRIER_DEFERRED_PDN_ACTIVATE``
+  * ``2`` - ``LWM2M_CARRIER_DEFERRED_BOOTSTRAP_NO_ROUTE``
+  * ``3`` - ``LWM2M_CARRIER_DEFERRED_BOOTSTRAP_CONNECT``
+  * ``4`` - ``LWM2M_CARRIER_DEFERRED_BOOTSTRAP_SEQUENCE``
+  * ``5`` - ``LWM2M_CARRIER_DEFERRED_SERVER_NO_ROUTE``
+  * ``6`` - ``LWM2M_CARRIER_DEFERRED_SERVER_CONNECT``
+  * ``7`` - ``LWM2M_CARRIER_DEFERRED_SERVER_REGISTRATION``
+  * ``8`` - ``LWM2M_CARRIER_DEFERRED_SERVICE_UNAVAILABLE``
+  * ``9`` - ``LWM2M_CARRIER_DEFERRED_SIM_MSISDN``
 
   ``<timeout>`` indicates the time in seconds before the operation is resumed.
 
@@ -141,14 +141,14 @@ These may be the following:
 
   ``<type>`` indicates the type of error and can return the following values:
 
-  * ``0`` - - :c:macro:`LWM2M_CARRIER_ERROR_NO_ERROR`.
-  * ``1`` - - :c:macro:`LWM2M_CARRIER_ERROR_LTE_LINK_UP_FAIL`.
-  * ``2`` - - :c:macro:`LWM2M_CARRIER_ERROR_LTE_LINK_DOWN_FAIL`.
-  * ``3`` - - :c:macro:`LWM2M_CARRIER_ERROR_BOOTSTRAP`.
-  * ``4`` - - :c:macro:`LWM2M_CARRIER_ERROR_FOTA_FAIL`.
-  * ``5`` - - :c:macro:`LWM2M_CARRIER_ERROR_CONFIGURATION`.
-  * ``6`` - - :c:macro:`LWM2M_CARRIER_ERROR_INIT`.
-  * ``8`` - - :c:macro:`LWM2M_CARRIER_ERROR_CONNECT`.
+  * ``0`` - ``LWM2M_CARRIER_ERROR_NO_ERROR``
+  * ``1`` - ``LWM2M_CARRIER_ERROR_LTE_LINK_UP_FAIL``
+  * ``2`` - ``LWM2M_CARRIER_ERROR_LTE_LINK_DOWN_FAIL``
+  * ``3`` - ``LWM2M_CARRIER_ERROR_BOOTSTRAP``
+  * ``4`` - ``LWM2M_CARRIER_ERROR_FOTA_FAIL``
+  * ``5`` - ``LWM2M_CARRIER_ERROR_CONFIGURATION``
+  * ``6`` - ``LWM2M_CARRIER_ERROR_INIT``
+  * ``8`` - ``LWM2M_CARRIER_ERROR_CONNECT``
 
   ``<value>`` indicates the error value returned in this event.
 
@@ -182,13 +182,13 @@ The ``<cmd>`` command is a string, and can be used as follows:
 * ``AT#XCARRIER="app_data_set"[,<data>][,<obj_inst_id>,<res_inst_id>]``
 
   Put the value in ``<data>`` into the indicated path.
-  ``<data>`` must be a hexadecimal string in double quotes, unless ``sm_data_mode`` is enabled.
+  ``<data>`` must be a hexadecimal string in double quotes, unless :ref:`sm_data_mode` is enabled.
 
   * If ``<obj_inst_id>`` and ``<res_inst_id>`` are specified, the data is set in an instance of the Data resource (ID: 0) of the Binary App Data Container object (ID: 19).
     The URI path of the resource instance is indicated as ``/19/<obj_inst_id>/0/<res_inst_id>``.
   * If ``<obj_inst_id>`` and ``<res_inst_id>`` are not present, the data is set in the Uplink Data resource (ID: 0) of the App Data Container object (ID: 10250).
     The URI path of the resource instance is indicated as ``/10250/0/0``.
-  * If ``<data>`` is not present, |SM| enters ``sm_data_mode`` and the data is set in the Uplink Data resource (ID: 0) of the App Data Container object (ID: 10250).
+  * If ``<data>`` is not present, |SM| enters :ref:`sm_data_mode` and the data is set in the Uplink Data resource (ID: 0) of the App Data Container object (ID: 10250).
     The URI path of the resource instance is indicated as ``/10250/0/0``.
 
 * ``AT#XCARRIER="battery_level",<battery_level>``
@@ -528,10 +528,10 @@ The ``<cmd>`` command is a string, and can be used as follows:
   ``<pdn_type>`` must be an integer value.
   It accepts the following values:
 
-  * ``0`` - :c:macro:`LWM2M_CARRIER_PDN_TYPE_IPV4V6`.
-  * ``1`` - :c:macro:`LWM2M_CARRIER_PDN_TYPE_IPV4`.
-  * ``2`` - :c:macro:`LWM2M_CARRIER_PDN_TYPE_IPV6`.
-  * ``3`` - :c:macro:`LWM2M_CARRIER_PDN_TYPE_NONIP`.
+  * ``0`` - ``LWM2M_CARRIER_PDN_TYPE_IPV4V6``
+  * ``1`` - ``LWM2M_CARRIER_PDN_TYPE_IPV4``
+  * ``2`` - ``LWM2M_CARRIER_PDN_TYPE_IPV6``
+  * ``3`` - ``LWM2M_CARRIER_PDN_TYPE_NONIP``
 
   For details, see the ``CONFIG_LWM2M_CARRIER_PDN_TYPE`` Kconfig option.
 

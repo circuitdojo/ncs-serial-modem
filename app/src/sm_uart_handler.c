@@ -19,7 +19,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(sm_uart_handler, CONFIG_SM_LOG_LEVEL);
 
-#define SM_PIPE CONFIG_SM_CMUX
+#define SM_PIPE (CONFIG_SM_CMUX || CONFIG_SM_PPP)
 
 #define UART_RX_TIMEOUT_US		2000
 #define UART_ERROR_DELAY_MS		500
@@ -512,7 +512,14 @@ static int tx_write_nonblock(const uint8_t *data, size_t len)
 
 	k_mutex_unlock(&uc->mutex);
 
-	k_work_submit_to_queue(&sm_work_q, &tx_write_nonblock_work);
+	bool running = (sm_work_q.flags & K_WORK_QUEUE_STARTED) == K_WORK_QUEUE_STARTED;
+
+	if (running) {
+		k_work_submit_to_queue(&sm_work_q, &tx_write_nonblock_work);
+	} else {
+		/* Work queue not running yet, use system work queue. */
+		k_work_submit(&tx_write_nonblock_work);
+	}
 
 	return ret;
 }
@@ -521,8 +528,13 @@ static int sm_uart_tx_write(const uint8_t *data, size_t len, bool flush, bool ur
 {
 	int ret;
 
-	/* Send only from Serial Modem work queue to guarantee URC ordering. */
-	if (k_current_get() == &sm_work_q.thread && !urc) {
+	/* Send only from Serial Modem work queue to guarantee URC ordering.
+	 * But only if the work queue is running.
+	 * During startup, we need to use the system workqueue.
+	 */
+	bool running = (sm_work_q.flags & K_WORK_QUEUE_STARTED) == K_WORK_QUEUE_STARTED;
+
+	if (running && k_current_get() == k_work_queue_thread_get(&sm_work_q) && !urc) {
 		ret = tx_write_block(data, &len, flush);
 	} else {
 		/* In other contexts, we buffer until Serial Modem work queue becomes available. */
@@ -598,6 +610,8 @@ int sm_uart_handler_enable(void)
 		return -EFAULT;
 	}
 
+	sm_at_host_reset();
+
 	/* Flush possibly pending data in case Serial Modem was idle. */
 	tx_start();
 
@@ -613,6 +627,9 @@ int sm_uart_handler_disable(void)
 		LOG_ERR("TX disable failed (%d).", err);
 		return err;
 	}
+
+	sm_at_host_urc_ctx_release(urc_ctx, SM_URC_OWNER_AT);
+	urc_ctx = NULL;
 
 	err = rx_disable();
 	if (err) {

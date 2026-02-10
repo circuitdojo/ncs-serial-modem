@@ -6,7 +6,6 @@
 
 #include "sm_at_host.h"
 #include "sm_at_fota.h"
-#include "sm_at_socket.h"
 #include "sm_uart_handler.h"
 #include "sm_util.h"
 #include "sm_ctrl_pin.h"
@@ -32,13 +31,6 @@ extern FUNC_NORETURN void sm_reset(void);
 
 LOG_MODULE_REGISTER(sm_at_host, CONFIG_SM_LOG_LEVEL);
 
-#define SM_SYNC_STR     "Ready\r\n"
-#define SM_SYNC_ERR_STR "INIT ERROR\r\n"
-#define OK_STR		 "\r\nOK\r\n"
-#define ERROR_STR	 "\r\nERROR\r\n"
-#define CRLF_STR	 "\r\n"
-#define CR		 '\r'
-#define LF		 '\n'
 #define HEXDUMP_LIMIT    16
 
 #define AT_XDFU_INIT_CMD "AT#XDFUINIT"
@@ -61,6 +53,10 @@ static size_t datamode_data_len; /* Expected data length in data mode. */
 
 uint8_t sm_at_buf[CONFIG_SM_AT_BUF_SIZE + 1];
 uint8_t sm_data_buf[SM_MAX_MESSAGE_SIZE];
+static bool inside_quotes;
+static size_t at_cmd_len;
+static size_t echo_len;
+static uint8_t prev_character;
 
 RING_BUF_DECLARE(data_rb, CONFIG_SM_DATAMODE_BUF_SIZE);
 static uint8_t quit_str_partial_match;
@@ -223,10 +219,6 @@ static void raw_send(uint8_t flags)
 				(void)ring_buf_get_finish(&data_rb, size_send + size_finish);
 			}
 			k_mutex_unlock(&mutex_mode);
-
-#if defined(CONFIG_SM_DATAMODE_URC)
-			rsp_send("\r\n#XDATAMODE: %d\r\n", size_finish);
-#endif
 		} else {
 			break;
 		}
@@ -384,7 +376,7 @@ static int cmd_grammar_check(const char *cmd, size_t length)
 
 	/* check AT (if not, no check) */
 	if (length < 2 || toupper((int)cmd[0]) != 'A' || toupper((int)cmd[1]) != 'T') {
-		return -EINVAL;
+		return -ENOENT;
 	}
 
 	/* check AT<NULL> */
@@ -621,8 +613,13 @@ static void cmd_send(uint8_t *buf, size_t cmd_length, size_t buf_size, bool *sto
 		offset++;
 	}
 
-	if (cmd_grammar_check(at_cmd, cmd_length) != 0) {
+	err = cmd_grammar_check(at_cmd, cmd_length);
+	if (err < 0) {
 		LOG_ERR("AT command syntax invalid: %s", at_cmd);
+		if (err == -ENOENT) {
+			/* Not an AT command, ignore silently. */
+			return;
+		}
 		rsp_send_error();
 		return;
 	}
@@ -670,13 +667,16 @@ static void cmd_send(uint8_t *buf, size_t cmd_length, size_t buf_size, bool *sto
 static size_t cmd_rx_handler(const uint8_t *buf, const size_t len, bool *stop_at_receive)
 {
 	size_t processed;
-	static bool inside_quotes;
-	static size_t at_cmd_len;
-	static size_t echo_len;
-	static uint8_t prev_character;
 	bool send = false;
 
 	for (processed = 0; processed < len && send == false; processed++) {
+		/* Don't buffer anything until "AT" is received */
+		if ((at_cmd_len == 0 && toupper(buf[processed]) != 'A') ||
+		    (at_cmd_len == 1 && toupper(buf[processed]) != 'T')) {
+			inside_quotes = false;
+			at_cmd_len = 0;
+			continue;
+		}
 
 		/* Handle control characters */
 		switch (buf[processed]) {
@@ -1109,9 +1109,7 @@ int sm_at_host_power_off(void)
 	const int err = at_host_power_off(false);
 
 	/* Write sync str to buffer so it is sent first when resuming, do not flush. */
-	if (!IS_ENABLED(CONFIG_SM_SKIP_READY_MSG)) {
-		sm_tx_write(SM_SYNC_STR, strlen(SM_SYNC_STR), false, false);
-	}
+	sm_tx_write(SM_SYNC_STR, strlen(SM_SYNC_STR), false, false);
 
 	return err;
 }
@@ -1176,7 +1174,11 @@ static void event_work_fn(struct k_work *work)
 		if (event_cb->events & events) {
 			LOG_DBG("Notify event cb: %p for events: %d", (void *)event_cb, events);
 			event_cb->cb(NULL);
+			event_cb->events &= ~events;
+		}
+		if (event_cb->events == 0) {
 			sys_slist_remove(&event_ctx.event_cbs, NULL, node);
+			LOG_DBG("Event cb: %p removed", (void *)event_cb);
 		}
 	}
 }
@@ -1211,52 +1213,31 @@ void sm_at_host_urc_ctx_release(struct sm_urc_ctx *ctx, enum sm_urc_owner owner)
 	k_mutex_unlock(&ctx->mutex);
 }
 
-int sm_at_host_init(void)
+void sm_at_host_reset(void)
 {
-	int err;
-
-	ring_buf_init(&urc_ctx.rb, sizeof(urc_ctx.buf), urc_ctx.buf);
-	k_mutex_init(&urc_ctx.mutex);
-
 	k_mutex_lock(&mutex_mode, K_FOREVER);
 	sm_datamode_time_limit = 0;
 	datamode_handler = NULL;
 	at_mode = SM_AT_COMMAND_MODE;
+	inside_quotes = 0;
+	at_cmd_len = 0;
+	echo_len = 0;
+	prev_character = 0;
 	k_mutex_unlock(&mutex_mode);
+}
+
+static int sm_at_host_init(void)
+{
+	ring_buf_init(&urc_ctx.rb, sizeof(urc_ctx.buf), urc_ctx.buf);
+	k_mutex_init(&urc_ctx.mutex);
+
+	sm_at_host_reset();
 
 	k_work_init(&raw_send_scheduled_work, raw_send_scheduled);
 
-	err = sm_uart_handler_enable();
-	if (err) {
-		return err;
-	}
-
-	err = sm_at_init();
-	if (err) {
-		/* Send "INIT ERROR" string to indicate that AT host init failed */
-		err = sm_at_send_str(SM_SYNC_ERR_STR);
-		if (err) {
-			return err;
-		}
-		return -EFAULT;
-	}
-
-	if (!IS_ENABLED(CONFIG_SM_SKIP_READY_MSG)) {
-		/* Send Ready string to indicate that AT host is ready */
-		err = sm_at_send_str(SM_SYNC_STR);
-		if (err) {
-			return err;
-		}
-	}
-
-	/* This is here and not earlier because in case of firmware
-	 * update it will send an AT response so the UART must be up.
-	 */
-	sm_fota_post_process();
-
-	LOG_INF("at_host init done");
 	return 0;
 }
+SYS_INIT(sm_at_host_init, APPLICATION, 0);
 
 void sm_at_host_uninit(void)
 {
@@ -1268,8 +1249,6 @@ void sm_at_host_uninit(void)
 	}
 	datamode_handler = NULL;
 	k_mutex_unlock(&mutex_mode);
-
-	sm_at_uninit();
 
 	at_host_power_off(true);
 
