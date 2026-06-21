@@ -37,4 +37,4 @@ manifest:
     - name: nfed
       remote: nfed
       repo-path: nrf9160-feather-examples-and-drivers
-      revision: v3.2.x
+      revision: v3.4.x

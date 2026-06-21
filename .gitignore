@@ -20,5 +20,6 @@ venv
 .xxproject
 .envrc
 .vscode
+app/.zephyr-overrides.json
 sanity-out*
 twister-out*
