@@ -1,29 +1,19 @@
+/*
+ * Copyright (c) 2026 Circuit Dojo LLC
+ *
+ * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
+ */
 
 / {
 	chosen {
-		ncs,sm-uart = &uart0;
+		zephyr,code-partition = &b0_partition;
 	};
-};
-
-&uart0 {
-	status = "okay";
-};
-
-&button0 {
-	status = "disabled";
 };
 
 /*
  * Flash partition layout for the nRF9151 Feather with B0 and updatable MCUboot.
- *
- * 0x0000_0000  b0 (NSIB)                    ( 32 kB)
- * 0x0000_8000  s0 (MCUboot image, slot 0)   ( 48 kB)
- * 0x0001_4000  s1 (MCUboot image, slot 1)   ( 48 kB)
- * 0x0002_0000  slot0 (primary app)          (444 kB)
- *   0x0002_0000  TF-M secure                ( 32 kB)
- *   0x0002_8000  Application (non-secure)   (412 kB)
- * 0x0008_f000  slot1 (secondary app)        (440 kB)
- * 0x000f_d000  Non-secure storage           ( 12 kB)
+ * Keep this in sync with boards/circuitdojo_feather_nrf9151_ns.overlay and the
+ * MCUboot overlay.
  */
 
 /delete-node/ &boot_partition;
@@ -108,52 +98,17 @@
 	};
 };
 
-/*
- * Application SRAM layout. Keep the modem trace IPC area from the Feather board,
- * but reduce secure RAM so the non-secure serial modem application has room.
- */
+/* B0 and MCUboot must use matching SRAM layouts. */
 
 /delete-node/ &sram0_s;
 /delete-node/ &sram0_ns;
 
-/ {
-	reserved-memory {
-		sram0_s: image_s@20000000 {
-			reg = <0x20000000 DT_SIZE_K(16)>;
-		};
+&sram0 {
+	sram0_s: sram@0 {
+		reg = <0x0 0xc000>;
+	};
 
-		sram0_ns: image_ns@20004000 {
-			reg = <0x20004000 DT_SIZE_K(240)>;
-			#address-cells = <1>;
-			#size-cells = <1>;
-			ranges = <0x0 0x20004000 DT_SIZE_K(240)>;
-
-			sram0_modem: sram0_ns_modem: image_modem@0 {
-				reg = <0x0 DT_SIZE_K(40)>;
-				#address-cells = <1>;
-				#size-cells = <1>;
-				ranges = <0x0 0x0 DT_SIZE_K(40)>;
-
-				cpuapp_cpucell_ipc_shm_ctrl: image_modem_ctrl@0 {
-					reg = <0x0 0x728>;
-				};
-
-				cpuapp_cpucell_ipc_shm_heap: image_modem_tx@728 {
-					reg = <0x728 0x20d8>;
-				};
-
-				cpucell_cpuapp_ipc_shm_heap: image_modem_rx@2800 {
-					reg = <0x2800 0x2000>;
-				};
-
-				cpucell_cpuapp_ipc_shm_trace: image_modem_trace@4800 {
-					reg = <0x4800 0x4000>;
-				};
-			};
-
-			sram0_ns_app: image_ns_app@a000 {
-				reg = <0xa000 DT_SIZE_K(200)>;
-			};
-		};
+	sram0_ns: sram@c000 {
+		reg = <0xc000 0x34000>;
 	};
 };
