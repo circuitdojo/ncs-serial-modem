@@ -2,10 +2,24 @@
 / {
 	chosen {
 		ncs,sm-uart = &uart0;
+		/*
+		 * Keep the console/shell off uart0: uart0 is the AT host UART and is
+		 * brought up with async RX, so sm_log_init() cannot PM-suspend it
+		 * (uarte_pm_suspend() returns -EAGAIN while RX is enabled), which is
+		 * reported as "INIT ERROR". Move the console to uart1, the modem-trace
+		 * UART, matching the nRF9151 DK / Thingy91x layout. App logs are off by
+		 * default and enabled at runtime with AT#XLOG.
+		 */
+		zephyr,console = &uart1;
+		zephyr,shell-uart = &uart1;
 	};
 };
 
 &uart0 {
+	status = "okay";
+};
+
+&uart1 {
 	status = "okay";
 };
 
