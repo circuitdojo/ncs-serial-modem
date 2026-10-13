@@ -24,6 +24,8 @@ LOG_MODULE_REGISTER(sm_uart_handler, CONFIG_SM_LOG_LEVEL);
 
 #define UART_RX_TIMEOUT_US		2000
 #define UART_ERROR_DELAY_MS		500
+#define UART_RX_RECOVERY_DELAY_MS	10
+#define UART_RX_RECOVERY_RETRY_MS	100
 
 const struct device *const sm_uart_dev = DEVICE_DT_GET(DT_CHOSEN(ncs_sm_uart));
 uint32_t sm_uart_baudrate;
@@ -56,9 +58,16 @@ enum sm_uart_state {
 	SM_UART_STATE_TX_ENABLED_BIT,
 	SM_UART_STATE_RX_ENABLED_BIT,
 	SM_UART_STATE_RX_RECOVERY_BIT,
-	SM_UART_STATE_RX_RECOVERY_DISABLED_BIT
+	SM_UART_STATE_RX_RECOVERY_DISABLED_BIT,
+	SM_UART_STATE_RX_RECOVERY_FAILED_BIT
 };
 static atomic_t uart_state;
+
+/* Re-enables RX after the driver has disabled it (errors, break, no buffers).
+ * Runs on the system work queue, as sm_work_q is not running yet when the pipe is opened.
+ */
+static void rx_recovery_work_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(rx_recovery_work, rx_recovery_work_fn);
 
 enum sm_pipe_state {
 	SM_PIPE_STATE_INIT_BIT,
@@ -137,7 +146,6 @@ static int rx_enable(void)
 
 	buf = rx_buf_alloc();
 	if (!buf) {
-		LOG_ERR("Failed to allocate %s", "UART RX buffer");
 		return -ENOMEM;
 	}
 
@@ -157,6 +165,7 @@ static int rx_disable(void)
 	int err;
 
 	atomic_set_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_DISABLED_BIT);
+	k_work_cancel_delayable(&rx_recovery_work);
 
 	while (atomic_test_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT)) {
 		/* Wait until possible recovery is complete. */
@@ -179,21 +188,39 @@ static int rx_disable(void)
 
 static void rx_recovery(void)
 {
+	bool was_enabled;
 	int err;
 
+	/* Mark recovery in progress before checking whether it is allowed, so that
+	 * rx_disable() either sees the recovery or this sees the disable.
+	 */
+	atomic_set_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT);
+
 	if (atomic_test_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_DISABLED_BIT)) {
+		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT);
 		return;
 	}
 
-	atomic_set_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT);
-
+	was_enabled = atomic_test_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
 	err = rx_enable();
 	if (err) {
-		/* TODO: Retry with delay? */
-		LOG_ERR("UART RX recovery failed: %d", err);
+		if (!atomic_test_and_set_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_FAILED_BIT)) {
+			LOG_ERR("UART RX recovery failed: %d, retrying", err);
+		}
+		/* Keep retrying, e.g. until the pipe reader frees an RX buffer. */
+		k_work_schedule(&rx_recovery_work, K_MSEC(UART_RX_RECOVERY_RETRY_MS));
+	} else if (atomic_test_and_clear_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_FAILED_BIT) ||
+		   !was_enabled) {
+		LOG_INF("UART RX re-enabled");
 	}
 
 	atomic_clear_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_BIT);
+}
+
+static void rx_recovery_work_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+	rx_recovery();
 }
 
 static void tx_enable(void)
@@ -336,8 +363,17 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 			rx_buf_unref(evt->data.rx_buf.buf);
 		}
 		break;
+	case UART_RX_STOPPED:
+		LOG_WRN("UART RX stopped, reason: %d", evt->data.rx_stop.reason);
+		break;
 	case UART_RX_DISABLED:
 		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
+		if (!atomic_test_bit(&uart_state, SM_UART_STATE_RX_RECOVERY_DISABLED_BIT)) {
+			/* Not requested by rx_disable(). Re-enable RX even if the pipe
+			 * is not being read, or RX stays disabled.
+			 */
+			k_work_schedule(&rx_recovery_work, K_MSEC(UART_RX_RECOVERY_DELAY_MS));
+		}
 		/* Notify pipe that receive may be ready after re-enable */
 		modem_pipe_notify_receive_ready(&sm_pipe.pipe);
 		break;
@@ -475,6 +511,9 @@ static int pipe_open(void *data)
 	tx_enable();
 
 	modem_pipe_notify_opened(&sm_pipe.pipe);
+
+	/* Recover anything that disabled RX before the pipe reader attached. */
+	k_work_schedule(&rx_recovery_work, K_MSEC(UART_RX_RECOVERY_DELAY_MS));
 
 	return 0;
 }
