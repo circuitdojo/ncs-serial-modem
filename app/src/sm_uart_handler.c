@@ -63,6 +63,9 @@ enum sm_uart_state {
 };
 static atomic_t uart_state;
 
+/* UART_RX_STOPPED events since RX last delivered data, to log once per episode. */
+static atomic_t rx_stop_count;
+
 /* Re-enables RX after the driver has disabled it (errors, break, no buffers).
  * Runs on the system work queue, as sm_work_q is not running yet when the pipe is opened.
  */
@@ -331,6 +334,7 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 			 */
 			break;
 		}
+		atomic_clear(&rx_stop_count);
 		rx_buf_ref(evt->data.rx.buf);
 		rx_event.buf = &evt->data.rx.buf[evt->data.rx.offset];
 		rx_event.len = evt->data.rx.len;
@@ -364,7 +368,12 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 		}
 		break;
 	case UART_RX_STOPPED:
-		LOG_WRN_RATELIMIT("UART RX stopped, reason: %d", evt->data.rx_stop.reason);
+		/* A line held low (e.g. an unpowered host) stops RX again after every
+		 * recovery, so only log the first stop until data is received.
+		 */
+		if (atomic_inc(&rx_stop_count) == 0) {
+			LOG_WRN("UART RX stopped, reason: %d", evt->data.rx_stop.reason);
+		}
 		break;
 	case UART_RX_DISABLED:
 		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
