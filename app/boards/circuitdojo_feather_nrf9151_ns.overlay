@@ -148,12 +148,13 @@
 				#size-cells = <1>;
 				ranges = <0x0 0x0 DT_SIZE_K(40)>;
 
+				/* Must equal NRF_MODEM_CELLULAR_SHMEM_CTRL_SIZE. */
 				cpuapp_cpucell_ipc_shm_ctrl: image_modem_ctrl@0 {
-					reg = <0x0 0x728>;
+					reg = <0x0 0x4e8>;
 				};
 
-				cpuapp_cpucell_ipc_shm_heap: image_modem_tx@728 {
-					reg = <0x728 0x20d8>;
+				cpuapp_cpucell_ipc_shm_heap: image_modem_tx@4e8 {
+					reg = <0x4e8 0x2318>;
 				};
 
 				cpucell_cpuapp_ipc_shm_heap: image_modem_rx@2800 {
