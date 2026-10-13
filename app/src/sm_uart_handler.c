@@ -364,7 +364,7 @@ static void uart_callback(const struct device *dev, struct uart_event *evt, void
 		}
 		break;
 	case UART_RX_STOPPED:
-		LOG_WRN("UART RX stopped, reason: %d", evt->data.rx_stop.reason);
+		LOG_WRN_RATELIMIT("UART RX stopped, reason: %d", evt->data.rx_stop.reason);
 		break;
 	case UART_RX_DISABLED:
 		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
@@ -445,8 +445,12 @@ static int sm_uart_handler_enable(void)
 			uint32_t now = k_uptime_get_32();
 
 			if (now - start_time > UART_ERROR_DELAY_MS) {
-				LOG_ERR("UART check failed: %d", err);
-				return -EIO;
+				/* Do not give up on the UART: the host may still be
+				 * transmitting. RX errors after this are recovered by
+				 * rx_recovery_work.
+				 */
+				LOG_WRN("UART line errors persist: %d, continuing", err);
+				break;
 			}
 			k_sleep(K_MSEC(10));
 		}
