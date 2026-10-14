@@ -7,7 +7,23 @@
 / {
 	chosen {
 		zephyr,code-partition = &b0_partition;
+		zephyr,console = &uart1;
 	};
+};
+
+/*
+ * uart0 is the Serial Modem's AT UART. Keep the bootloaders off it: their
+ * polling console runs the UARTE receiver, which a host transmitting across a
+ * reset overruns, and the error it latches is still pending when the
+ * application enables RX. Print on uart1 (the application's console) instead.
+ */
+&uart0 {
+	status = "disabled";
+};
+
+&uart1 {
+	current-speed = <1000000>;
+	status = "okay";
 };
 
 /*
