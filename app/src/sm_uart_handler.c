@@ -152,13 +152,20 @@ static int rx_enable(void)
 		return -ENOMEM;
 	}
 
+	/* Mark RX enabled before starting it: RX can end again (an error or a full
+	 * buffer while the host keeps transmitting) and report UART_RX_DISABLED from
+	 * the interrupt before uart_rx_enable() returns. Setting the bit afterwards
+	 * would undo that report, and RX would stay disabled with recovery skipping
+	 * it as already enabled.
+	 */
+	atomic_set_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
 	ret = uart_rx_enable(sm_uart_dev, buf->buf, sizeof(buf->buf), UART_RX_TIMEOUT_US);
 	if (ret) {
+		atomic_clear_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
 		LOG_ERR("UART RX enable failed: %d", ret);
 		rx_buf_unref(buf);
 		return ret;
 	}
-	atomic_set_bit(&uart_state, SM_UART_STATE_RX_ENABLED_BIT);
 
 	return 0;
 }
