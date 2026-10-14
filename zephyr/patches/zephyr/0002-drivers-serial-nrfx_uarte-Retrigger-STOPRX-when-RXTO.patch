@@ -1,0 +1,134 @@
+From 31173d3b80cc1e552d865fa7bf70317d36a44cfc Mon Sep 17 00:00:00 2001
+From: Jared Wolff <hello@jaredwolff.com>
+Date: Wed, 14 Oct 2026 09:04:14 -0400
+Subject: [PATCH 2/2] drivers: serial: nrfx_uarte: Retrigger STOPRX when RXTO
+ does not follow
+
+STOPRX has no effect when it reaches the receiver before RX has started,
+e.g. when an ERROR (an overrun while the peer keeps transmitting) is
+handled right after STARTRX. The receiver then keeps running, the
+driver waits for an RXTO that never comes, and RX stays stuck: no more
+data and no UART_RX_DISABLED, so the user cannot recover it.
+
+Seen on an nRF9151 at 921600 baud without flow control: a sustained
+upload from the host overran the receiver, and after a few recoveries
+RX stopped receiving for good while TX kept working.
+
+Arm a timer whenever RXTO becomes expected. If RXTO has not arrived
+after 10 ms, trigger STOPRX again; after 3 retries without RXTO the
+receiver was not running, so complete the stop as RXTO would.
+---
+ drivers/serial/uart_nrfx_uarte.c | 65 ++++++++++++++++++++++++++++++++
+ 1 file changed, 65 insertions(+)
+
+diff --git a/drivers/serial/uart_nrfx_uarte.c b/drivers/serial/uart_nrfx_uarte.c
+index 53512351c32..2cc6b453e39 100644
+--- a/drivers/serial/uart_nrfx_uarte.c
++++ b/drivers/serial/uart_nrfx_uarte.c
+@@ -239,6 +239,9 @@ struct uarte_async_rx {
+ 	uint8_t flush_cnt;
+ 	/* Flag indicating that STOPRX is triggered and RXTO is expected. */
+ 	bool stopped;
++	/* Retriggers STOPRX when RXTO does not follow it, see stoprx_guard(). */
++	struct k_timer stoprx_timer;
++	uint8_t stoprx_retries;
+ 	/* STOPRX must wait until ISR accounts for a pending ENDRX rollover. */
+ 	bool stoprx_deferred;
+ 	volatile bool enabled;
+@@ -867,6 +870,12 @@ static void tx_start(const struct device *dev, const uint8_t *buf, size_t len)
+ 
+ #if defined(UARTE_ANY_ASYNC)
+ static void rx_timeout(struct k_timer *timer);
++static void stoprx_guard(struct k_timer *timer);
++static void rxto_isr(const struct device *dev);
++
++/* RXTO follows STOPRX within a few character times plus the RX FIFO drain. */
++#define UARTE_STOPRX_GUARD_MS 10
++#define UARTE_STOPRX_RETRIES 3
+ static void tx_timeout(struct k_timer *timer);
+ 
+ static void user_callback(const struct device *dev, struct uart_event *evt)
+@@ -962,6 +971,10 @@ static ALWAYS_INLINE void trigger_stoprx(const struct device *dev, bool force)
+ 	 */
+ 	async_rx->stopped = force ? true : (async_rx->next_buf == NULL);
+ 	nrf_uarte_task_trigger(get_uarte_instance(dev), NRF_UARTE_TASK_STOPRX);
++	if (async_rx->stopped) {
++		async_rx->stoprx_retries = 0;
++		k_timer_start(&async_rx->stoprx_timer, K_MSEC(UARTE_STOPRX_GUARD_MS), K_NO_WAIT);
++	}
+ }
+ 
+ #ifdef UARTE_HAS_FRAME_TIMEOUT
+@@ -1703,6 +1716,8 @@ static int uarte_async_init(const struct device *dev)
+ 
+ 	k_timer_init(&data->async->rx.timer, rx_timeout, NULL);
+ 	k_timer_user_data_set(&data->async->rx.timer, (void *)dev);
++	k_timer_init(&data->async->rx.stoprx_timer, stoprx_guard, NULL);
++	k_timer_user_data_set(&data->async->rx.stoprx_timer, (void *)dev);
+ 	k_timer_init(&data->async->tx.timer, tx_timeout, NULL);
+ 	k_timer_user_data_set(&data->async->tx.timer, (void *)dev);
+ 
+@@ -2155,6 +2170,55 @@ static void rx_idle_line_handle(const struct device *dev)
+  * If rx_timeout_left is less than rx_timeout_slab it means that receiving has
+  * timed out and we should tell user about that.
+  */
++/* STOPRX has no effect when it reaches the receiver before RX has started, e.g. when
++ * an ERROR (overrun while the peer keeps transmitting) is handled right after
++ * STARTRX. The receiver then keeps running, RXTO never comes and RX stays stuck:
++ * no more data and no UART_RX_DISABLED, so the user cannot recover. Trigger STOPRX
++ * again until RXTO arrives. If it never does, the receiver was not running and
++ * the stop is completed here.
++ */
++static void stoprx_guard(struct k_timer *timer)
++{
++	const struct device *dev = k_timer_user_data_get(timer);
++	NRF_UARTE_Type *uarte = get_uarte_instance(dev);
++	struct uarte_nrfx_data *data = dev->data;
++	struct uarte_async_rx *async_rx = &data->async->rx;
++	unsigned int key = irq_lock();
++
++	if (!async_rx->stopped) {
++		irq_unlock(key);
++		return;
++	}
++	if (nrf_uarte_event_check(uarte, NRF_UARTE_EVENT_RXTO)) {
++		/* Pending, the UARTE interrupt handles it. */
++		k_timer_start(timer, K_MSEC(UARTE_STOPRX_GUARD_MS), K_NO_WAIT);
++		irq_unlock(key);
++		return;
++	}
++	if (async_rx->stoprx_retries < UARTE_STOPRX_RETRIES) {
++		async_rx->stoprx_retries++;
++		nrf_uarte_task_trigger(uarte, NRF_UARTE_TASK_STOPRX);
++		k_timer_start(timer, K_MSEC(UARTE_STOPRX_GUARD_MS), K_NO_WAIT);
++		irq_unlock(key);
++		LOG_WRN("%s: no RXTO %d ms after STOPRX, triggered it again (%u)",
++			dev->name, UARTE_STOPRX_GUARD_MS, async_rx->stoprx_retries);
++		return;
++	}
++	async_rx->stopped = false;
++#ifdef CONFIG_UARTE_NRFX_UARTE_COUNT_BYTES_WITH_TIMER
++	if (IS_CBWT(dev)) {
++		cbwt_rxto_isr(dev, true);
++	} else {
++		rxto_isr(dev);
++	}
++#else
++	rxto_isr(dev);
++#endif
++	irq_unlock(key);
++	LOG_ERR("%s: no RXTO after %d STOPRX, RX stop completed", dev->name,
++		UARTE_STOPRX_RETRIES + 1);
++}
++
+ static void rx_timeout(struct k_timer *timer)
+ {
+ 	const struct device *dev = k_timer_user_data_get(timer);
+@@ -2644,6 +2708,7 @@ static void uarte_nrfx_isr_async(const void *arg)
+ 	 */
+ 	if (rxto) {
+ 		async_rx->stopped = false;
++		k_timer_stop(&async_rx->stoprx_timer);
+ #ifdef CONFIG_UARTE_NRFX_UARTE_COUNT_BYTES_WITH_TIMER
+ 		if (IS_CBWT(dev)) {
+ 			cbwt_rxto_isr(dev, true);

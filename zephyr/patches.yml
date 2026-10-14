@@ -1,0 +1,17 @@
+# Patches for other west projects, applied with "west patch apply" after
+# "west update" ("west patch clean" undoes them). See zephyr/patches/README.md.
+patches:
+  - path: zephyr/0001-drivers-serial-nrfx_uarte-Resync-legacy-RX-byte-coun.patch
+    sha256sum: a79ebb080a365f0281eebd167298dc2c7989e2da04796ff66f89c93b21a5df12
+    module: zephyr
+    author: Jared Wolff
+    email: hello@jaredwolff.com
+    date: 2026-10-14
+    upstreamable: true
+  - path: zephyr/0002-drivers-serial-nrfx_uarte-Retrigger-STOPRX-when-RXTO.patch
+    sha256sum: 51faf97c7d486e1d3cf080523c4adbb7158e9c7ec0e47553a98638b211c1aeb9
+    module: zephyr
+    author: Jared Wolff
+    email: hello@jaredwolff.com
+    date: 2026-10-14
+    upstreamable: true
