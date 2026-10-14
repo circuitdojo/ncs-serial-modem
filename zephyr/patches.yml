@@ -9,7 +9,7 @@ patches:
     date: 2026-10-14
     upstreamable: true
   - path: zephyr/0002-drivers-serial-nrfx_uarte-Retrigger-STOPRX-when-RXTO.patch
-    sha256sum: 04d6729f96dcb936b3db2fb01359021d618c83c608b5a033e939dc0d6d042125
+    sha256sum: 7bff4327d2aaee964772d050c9d04d504b6d300e57df83aa03668764e2cef1ed
     module: zephyr
     author: Jared Wolff
     email: hello@jaredwolff.com
