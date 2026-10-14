@@ -29,6 +29,7 @@ This section represents alternative approaches for initializing the workspace.
       #. Click :guilabel:`Create New Application`.
       #. Select the **Browse nRF Connect SDK add-on Index** option.
       #. Search for the **Serial Modem** application and create the project.
+      #. Apply the |SM| patches to the |NCS| modules (see :file:`zephyr/patches/README.md`): open an nRF Connect terminal in the workspace and run ``west patch apply``.
 
    .. group-tab:: Command line
 
@@ -54,7 +55,7 @@ This section represents alternative approaches for initializing the workspace.
 
                   west update
 
-            Depending on the current state of your |NCS| modules, this may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
+               Depending on the current state of your |NCS| modules, this may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
 
             #. Apply the |SM| patches to the |NCS| modules (see :file:`zephyr/patches/README.md`)::
 
@@ -76,7 +77,7 @@ This section represents alternative approaches for initializing the workspace.
 
                   west update
 
-            This may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
+               This may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
 
             #. Apply the |SM| patches to the |NCS| modules (see :file:`zephyr/patches/README.md`)::
 

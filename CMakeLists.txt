@@ -16,7 +16,7 @@ if(CONFIG_UART_NRFX_UARTE)
   # One line of each patch's current version.
   foreach(marker
       "LOW_POWER_ENABLED(cfg) || IS_CBWT_LEGACY(dev)) {"
-      "static uint32_t stoprx_guard_ms(const struct device *dev)")
+      "static bool flushrx_wait(const struct device *dev, NRF_UARTE_Type *uarte)")
     string(FIND "${uarte_source}" "${marker}" found)
     if(found EQUAL -1)
       message(FATAL_ERROR
