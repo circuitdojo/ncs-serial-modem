@@ -1,4 +1,4 @@
-From 3eff222ebeb2a4296cfab7021d009a11e3066363 Mon Sep 17 00:00:00 2001
+From eea524a4fe31a3617f6539e474c677580da0c963 Mon Sep 17 00:00:00 2001
 From: Jared Wolff <hello@jaredwolff.com>
 Date: Wed, 14 Oct 2026 09:04:14 -0400
 Subject: [PATCH 2/2] drivers: serial: nrfx_uarte: Retrigger STOPRX when RXTO
@@ -20,12 +20,15 @@ short. If RXTO has not arrived after 8 character times (at least 10 ms;
 retries without RXTO the receiver was not running, so complete the stop
 as RXTO would. Refuse PM suspend while such a stop is pending, as for
 enabled RX, so the stop always completes on an active peripheral.
+Bound the wait for ENDRX in rx_flush(), which the forced completion can
+reach with interrupts locked, so an unexpected receiver state cannot
+stop the whole system.
 ---
- drivers/serial/uart_nrfx_uarte.c | 105 ++++++++++++++++++++++++++++++-
- 1 file changed, 103 insertions(+), 2 deletions(-)
+ drivers/serial/uart_nrfx_uarte.c | 117 +++++++++++++++++++++++++++++--
+ 1 file changed, 113 insertions(+), 4 deletions(-)
 
 diff --git a/drivers/serial/uart_nrfx_uarte.c b/drivers/serial/uart_nrfx_uarte.c
-index 423e1a5ecc1..6cae6f44d73 100644
+index 423e1a5ecc1..3f04edc67dc 100644
 --- a/drivers/serial/uart_nrfx_uarte.c
 +++ b/drivers/serial/uart_nrfx_uarte.c
 @@ -239,6 +239,9 @@ struct uarte_async_rx {
@@ -38,7 +41,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  	/* STOPRX must wait until ISR accounts for a pending ENDRX rollover. */
  	bool stoprx_deferred;
  	volatile bool enabled;
-@@ -867,6 +870,18 @@ static void tx_start(const struct device *dev, const uint8_t *buf, size_t len)
+@@ -867,6 +870,19 @@ static void tx_start(const struct device *dev, const uint8_t *buf, size_t len)
  
  #if defined(UARTE_ANY_ASYNC)
  static void rx_timeout(struct k_timer *timer);
@@ -54,10 +57,11 @@ index 423e1a5ecc1..6cae6f44d73 100644
 +#define UARTE_STOPRX_GUARD_MIN_MS 10
 +#define UARTE_STOPRX_GUARD_UNKNOWN_MS 300
 +#define UARTE_STOPRX_RETRIES 3
++#define UARTE_FLUSH_TIMEOUT_US 1000
  static void tx_timeout(struct k_timer *timer);
  
  static void user_callback(const struct device *dev, struct uart_event *evt)
-@@ -944,6 +959,33 @@ static void rx_disable_finalize(const struct device *dev)
+@@ -944,6 +960,33 @@ static void rx_disable_finalize(const struct device *dev)
  	}
  }
  
@@ -91,7 +95,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  /** @brief Trigger RX stop.
   *
   * Function triggers RX stop and sets the flag if it is expected that RXTO will be generated.
-@@ -962,6 +1004,9 @@ static ALWAYS_INLINE void trigger_stoprx(const struct device *dev, bool force)
+@@ -962,6 +1005,9 @@ static ALWAYS_INLINE void trigger_stoprx(const struct device *dev, bool force)
  	 */
  	async_rx->stopped = force ? true : (async_rx->next_buf == NULL);
  	nrf_uarte_task_trigger(get_uarte_instance(dev), NRF_UARTE_TASK_STOPRX);
@@ -101,7 +105,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  }
  
  #ifdef UARTE_HAS_FRAME_TIMEOUT
-@@ -1703,6 +1748,8 @@ static int uarte_async_init(const struct device *dev)
+@@ -1703,6 +1749,8 @@ static int uarte_async_init(const struct device *dev)
  
  	k_timer_init(&data->async->rx.timer, rx_timeout, NULL);
  	k_timer_user_data_set(&data->async->rx.timer, (void *)dev);
@@ -110,7 +114,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  	k_timer_init(&data->async->tx.timer, tx_timeout, NULL);
  	k_timer_user_data_set(&data->async->tx.timer, (void *)dev);
  
-@@ -2150,6 +2197,55 @@ static void rx_idle_line_handle(const struct device *dev)
+@@ -2150,6 +2198,55 @@ static void rx_idle_line_handle(const struct device *dev)
  }
  #endif
  
@@ -166,7 +170,25 @@ index 423e1a5ecc1..6cae6f44d73 100644
  /**
   * Whole timeout is divided by RX_TIMEOUT_DIV into smaller units, rx_timeout
   * is executed periodically every rx_timeout_slab us. If between executions
-@@ -2598,6 +2694,7 @@ static void uarte_nrfx_isr_async(const void *arg)
+@@ -2380,8 +2477,15 @@ static uint8_t rx_flush(const struct device *dev)
+ 
+ 	nrf_uarte_rx_buffer_set(uarte, config->rx_flush_buf, UARTE_HW_RX_FIFO_SIZE);
+ 	nrf_uarte_task_trigger(uarte, NRF_UARTE_TASK_FLUSHRX);
+-	while (!nrf_uarte_event_check(uarte, NRF_UARTE_EVENT_ENDRX)) {
+-		/* empty */
++	/* ENDRX follows FLUSHRX within microseconds. Bound the wait: this can run
++	 * with interrupts locked (stoprx_guard()), where waiting for a receiver in
++	 * an unexpected state would stop the whole system rather than only RX.
++	 */
++	for (uint32_t us = 0; !nrf_uarte_event_check(uarte, NRF_UARTE_EVENT_ENDRX); us++) {
++		if (us == UARTE_FLUSH_TIMEOUT_US) {
++			return 0;
++		}
++		k_busy_wait(1);
+ 	}
+ 	nrf_uarte_event_clear(uarte, NRF_UARTE_EVENT_ENDRX);
+ 
+@@ -2598,6 +2702,7 @@ static void uarte_nrfx_isr_async(const void *arg)
  	    event_check_clear(uarte, NRF_UARTE_EVENT_FRAME_TIMEOUT,
  			      NRF_UARTE_INT_RXTO_MASK, imask) && (async_rx->next_buf == NULL)) {
  		async_rx->stopped = true;
@@ -174,7 +196,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  	}
  #endif
  
-@@ -2653,6 +2750,7 @@ static void uarte_nrfx_isr_async(const void *arg)
+@@ -2653,6 +2758,7 @@ static void uarte_nrfx_isr_async(const void *arg)
  	 */
  	if (rxto) {
  		async_rx->stopped = false;
@@ -182,7 +204,7 @@ index 423e1a5ecc1..6cae6f44d73 100644
  #ifdef CONFIG_UARTE_NRFX_UARTE_COUNT_BYTES_WITH_TIMER
  		if (IS_CBWT(dev)) {
  			cbwt_rxto_isr(dev, true);
-@@ -3142,8 +3240,11 @@ static int uarte_pm_suspend(const struct device *dev)
+@@ -3142,8 +3248,11 @@ static int uarte_pm_suspend(const struct device *dev)
  
  #ifdef UARTE_ANY_ASYNC
  	if (data->async) {

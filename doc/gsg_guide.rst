@@ -56,6 +56,10 @@ This section represents alternative approaches for initializing the workspace.
 
             Depending on the current state of your |NCS| modules, this may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
 
+            #. Apply the |SM| patches to the |NCS| modules (see :file:`zephyr/patches/README.md`)::
+
+                  west patch apply
+
          .. group-tab:: Initialize workspace and add |SM| from scratch
 
             Complete the following steps for initialization:
@@ -73,6 +77,10 @@ This section represents alternative approaches for initializing the workspace.
                   west update
 
             This may take several minutes as it fetches all |NCS| modules according to the requirements of the |SM|.
+
+            #. Apply the |SM| patches to the |NCS| modules (see :file:`zephyr/patches/README.md`)::
+
+                  west patch apply
 
 Building and running
 ********************
