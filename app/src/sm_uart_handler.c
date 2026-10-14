@@ -137,23 +137,6 @@ static void rx_buf_unref(void *buf)
 	}
 }
 
-/* Workaround for the nRF UARTE async driver. An ERROR event latched while RX was
- * disabled stays pending through uart_rx_enable() (uart_err_check() only clears
- * ERRORSRC). The ERROR interrupt then fires right after STARTRX, and the driver's
- * STOPRX can be lost before RX has started: RX keeps running while the driver
- * considers it stopped, and neither UART_RX_RDY nor UART_RX_DISABLED is reported.
- * Seen when the host keeps transmitting across a reset. Remove once the driver
- * clears stale errors itself.
- */
-BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_CHOSEN(ncs_sm_uart), nordic_nrf_uarte));
-static void rx_clear_stale_errors(void)
-{
-	NRF_UARTE_Type *uarte = (NRF_UARTE_Type *)DT_REG_ADDR(DT_CHOSEN(ncs_sm_uart));
-
-	nrf_uarte_event_clear(uarte, NRF_UARTE_EVENT_ERROR);
-	(void)nrf_uarte_errorsrc_get_and_clear(uarte);
-}
-
 static int rx_enable(void)
 {
 	struct rx_buf_t *buf;
@@ -168,8 +151,6 @@ static int rx_enable(void)
 	if (!buf) {
 		return -ENOMEM;
 	}
-
-	rx_clear_stale_errors();
 
 	ret = uart_rx_enable(sm_uart_dev, buf->buf, sizeof(buf->buf), UART_RX_TIMEOUT_US);
 	if (ret) {
