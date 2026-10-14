@@ -13,9 +13,10 @@ if(CONFIG_UART_NRFX_UARTE)
   set(uarte_driver ${ZEPHYR_BASE}/drivers/serial/uart_nrfx_uarte.c)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${uarte_driver})
   file(READ ${uarte_driver} uarte_source)
+  # One line of each patch's current version.
   foreach(marker
-      "async_rx->total_user_byte_cnt = nrf_timer_cc_get(cfg->timer_regs, 0) - carried;"
-      "static void stoprx_guard(struct k_timer *timer)")
+      "LOW_POWER_ENABLED(cfg) || IS_CBWT_LEGACY(dev)) {"
+      "static uint32_t stoprx_guard_ms(const struct device *dev)")
     string(FIND "${uarte_source}" "${marker}" found)
     if(found EQUAL -1)
       message(FATAL_ERROR
