@@ -1,4 +1,4 @@
-From b9a15bac628c79b141071cadad0feb4f157eb811 Mon Sep 17 00:00:00 2001
+From b2eaca71aa6730cdeb7822b0a141becff6b2d266 Mon Sep 17 00:00:00 2001
 From: Jared Wolff <hello@jaredwolff.com>
 Date: Wed, 14 Oct 2026 09:38:00 -0400
 Subject: [PATCH 1/2] drivers: serial: nrfx_uarte: Resync legacy RX byte count
@@ -18,27 +18,32 @@ the counter was 2 bytes behind the total, so every command after the
 first lost its last 2 bytes, including the line terminator, and the
 peer timed out.
 
-Nothing of the new buffer has been received before STARTRX, so align
-the total with the counter there, less any flushed bytes carried into
-the new buffer that are counted but not yet reported.
+Align the total with the counter right before STARTRX. For that to be
+exact the FIFO must be empty there: bytes left in it when RX stopped
+(e.g. received after the last buffer filled) are counted already and
+would otherwise move into the new buffer at STARTRX unaccounted for.
+So with TIMER byte counting, flush the FIFO when RX stops and copy the
+bytes into the next buffer, as the low power mode already does, and
+subtract those carried bytes from the counter.
 ---
- drivers/serial/uart_nrfx_uarte.c | 25 +++++++++++++++++++++++++
- 1 file changed, 25 insertions(+)
+ drivers/serial/uart_nrfx_uarte.c | 38 ++++++++++++++++++++++++++++++--
+ 1 file changed, 36 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/serial/uart_nrfx_uarte.c b/drivers/serial/uart_nrfx_uarte.c
-index e0449fe7c0e..53512351c32 100644
+index e0449fe7c0e..423e1a5ecc1 100644
 --- a/drivers/serial/uart_nrfx_uarte.c
 +++ b/drivers/serial/uart_nrfx_uarte.c
 @@ -1940,10 +1940,17 @@ static int uarte_nrfx_rx_enable(const struct device *dev, uint8_t *buf,
  	}
  #endif
  
+-	if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) || LOW_POWER_ENABLED(cfg)) {
 +	/* Bytes from the previous FIFO flush copied into the new buffer: counted by
 +	 * the hardware already, not passed to the user yet.
 +	 */
 +	size_t carried = 0;
 +
- 	if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) || LOW_POWER_ENABLED(cfg)) {
++	if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) || LOW_POWER_ENABLED(cfg) || IS_CBWT_LEGACY(dev)) {
  		if (async_rx->flush_cnt) {
  			int cpy_len = MIN(len, async_rx->flush_cnt);
  
@@ -47,7 +52,7 @@ index e0449fe7c0e..53512351c32 100644
  			if (IS_ENABLED(UARTE_ANY_CACHE) &&
  			    (cfg->flags & UARTE_CFG_FLAG_CACHEABLE)) {
  				sys_cache_data_invd_range(cfg->rx_flush_buf, cpy_len);
-@@ -1986,6 +1993,24 @@ static int uarte_nrfx_rx_enable(const struct device *dev, uint8_t *buf,
+@@ -1986,6 +1993,27 @@ static int uarte_nrfx_rx_enable(const struct device *dev, uint8_t *buf,
  
  	nrf_uarte_rx_buffer_set(uarte, buf, len);
  
@@ -58,8 +63,11 @@ index e0449fe7c0e..53512351c32 100644
 +		 * ENDRX and from FIFO flushes, which do not match the RXDRDY count
 +		 * when the line has errors (framing, overrun): the total then ends
 +		 * up ahead of the counter, the difference wraps, and no more data is
-+		 * reported until the buffer fills. Nothing of the new buffer has been
-+		 * received before STARTRX, so align the total with the counter here.
++		 * reported until the buffer fills. Bytes left in the FIFO when RX
++		 * stopped were flushed by rxto_isr() and copied to the new buffer
++		 * above (carried), so the FIFO is empty and nothing else of the new
++		 * buffer has been received before STARTRX: align the total with the
++		 * counter here.
 +		 */
 +		nrf_timer_task_trigger(cfg->timer_regs, NRF_TIMER_TASK_CAPTURE0);
 +		nrf_barrier_rw();
@@ -72,3 +80,18 @@ index e0449fe7c0e..53512351c32 100644
  	if (IS_ENABLED(CONFIG_HAS_HW_NRF_UARTE120) && (cfg->flags & UARTE_CFG_FLAG_CACHEABLE)) {
  		/* Spurious RXTO event was seen on fast instance (UARTE120) thus
  		 * RXTO interrupt is kept enabled only when RX is active.
+@@ -2417,7 +2445,13 @@ static void rxto_isr(const struct device *dev)
+ 			async_rx->total_user_byte_cnt += rx_flush(dev);
+ 		}
+ #endif
+-	} else if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) || LOW_POWER_ENABLED(config)) {
++	} else if (IS_ENABLED(CONFIG_PM_DEVICE_RUNTIME) || LOW_POWER_ENABLED(config) ||
++		   IS_CBWT_LEGACY(dev)) {
++		/* Keep bytes left in the FIFO for the next buffer. With TIMER byte
++		 * counting they are counted already; flushing them here keeps the
++		 * FIFO empty at the next STARTRX, so uarte_nrfx_rx_enable() knows
++		 * exactly which counted bytes are still to be reported.
++		 */
+ 		async_rx->flush_cnt = rx_flush(dev);
+ 	}
+ 

@@ -96,8 +96,14 @@ size_report "$PR_ELF" "$PR_LOG" > "$MEMORY_REPORT_DIR/pr.size"
 require_size_file "$MEMORY_REPORT_DIR/pr.size" || report_failed
 
 git -C "$REPO_ROOT" fetch --depth=1 origin "$BASE_SHA"
+# The PR's patches to other projects (zephyr/patches.yml) are applied: remove
+# them before updating to the base, then apply the base's own, if any.
+(cd "$WORKSPACE_DIR" && west patch clean)
 git -C "$REPO_ROOT" checkout --detach "$BASE_SHA"
 (cd "$WORKSPACE_DIR" && west update -o=--depth=1 -n)
+if [ -f "$REPO_ROOT/zephyr/patches.yml" ]; then
+  (cd "$WORKSPACE_DIR" && west patch apply)
+fi
 (cd "$REPO_ROOT" && rm -rf "$BASELINE_OUT" \
   && west twister -T "$TWISTER_ROOT" -s "$SCENARIO" -p "$BOARD" \
        --build-only --overflow-as-errors -O "$BASELINE_OUT")

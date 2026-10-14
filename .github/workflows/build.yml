@@ -51,6 +51,9 @@ jobs:
           python3 -m pip install west
           west init -l serial_modem
           west update -o=--depth=1 -n
+          # Fixes to other projects carried in serial_modem/zephyr/patches;
+          # the build fails without them.
+          west patch apply
 
       - name: Install nrfutil and toolchain manager
         run: |
